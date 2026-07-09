@@ -1,31 +1,90 @@
-# ROS2 / colcon build artifacts (these live in ~/robot_ws, not the repo, but just in case)
+# ============================================================================
+# ROS2 / colcon build artifacts
+# ============================================================================
 build/
 install/
 log/
 
-# Python
+# ============================================================================
+# Python (from GitHub Python template, trimmed to what's actually relevant)
+# ============================================================================
 __pycache__/
-*.pyc
+*.py[codz]
+*$py.class
+*.so
+.Python
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+parts/
+sdist/
+var/
+wheels/
 *.egg-info/
+.installed.cfg
+*.egg
+MANIFEST
 
-# Editor
+# ============================================================================
+# Virtual environments
+# ============================================================================
+.env
+.envrc
+.venv
+env/
+venv/
+ENV/
+
+# ============================================================================
+# Testing / coverage
+# ============================================================================
+htmlcov/
+.tox/
+.nox/
+.coverage
+.coverage.*
+.cache
+nosetests.xml
+coverage.xml
+*.cover
+.hypothesis/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+
+# ============================================================================
+# Editors / IDEs
+# ============================================================================
 .vscode/
 .idea/
 *.swp
+.ropeproject
 
+# ============================================================================
 # OS
+# ============================================================================
 .DS_Store
 Thumbs.db
 
-# Large binary artefacts
+# ============================================================================
+# Large binary artefacts (paper media stays in Zenodo, not git)
+# ============================================================================
 *.mp4
 *.mov
 media/*.mp4
+
+# ============================================================================
+# Map artefacts (SLAM binaries; distribute via Zenodo for HardwareX)
+# ============================================================================
 maps/*.pgm
 maps/*.data
 maps/*.posegraph
 
-# Rosbags (never commit)
+# ============================================================================
+# Rosbags (never commit; distribute via Zenodo)
+# ============================================================================
 bags/
 *.db3
 *.mcap
