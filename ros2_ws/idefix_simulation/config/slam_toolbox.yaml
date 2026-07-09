@@ -1,0 +1,66 @@
+slam_toolbox:
+  ros__parameters:
+
+    
+    solver_plugin: solver_plugins::CeresSolver
+    ceres_linear_solver: SPARSE_NORMAL_CHOLESKY
+    ceres_preconditioner: SCHUR_JACOBI
+    ceres_trust_strategy: LEVENBERG_MARQUARDT
+    ceres_dogleg_type: TRADITIONAL_DOGLEG
+    ceres_loss_function: None
+
+    # Frames must match the TF tree
+    odom_frame: odom # 
+    map_frame: map
+    base_frame: base_footprint     
+    scan_topic: /scan
+
+   
+    mode: mapping 
+
+    
+    use_sim_time: true #Critical on WSL2 + Gazebo to match slam_toolbox to the clock everything else is using
+
+    # Only process a new scan if the robot moved at least this far; could lower minimum_travel_distance to 0.3 to get denser keyframes and a cleaner map, at the cost of a bigger graph.
+    minimum_travel_distance: 0.5
+    minimum_travel_heading: 0.5
+
+    # Avoid processing scans faster than every this-many seconds of sim time, protects against a fast scanner flooding the matcher.
+    minimum_time_interval: 0.5
+
+    # How far back in the buffer to look for scan-matching candidates. 10 m covers
+    # your whole room several times over. No need to change for this world.
+    scan_buffer_size: 10
+    scan_buffer_maximum_scan_distance: 10.0
+
+    # Loop closure is what corrects accumulated drift when the robot revisits a place.
+    do_loop_closing: true
+    loop_search_maximum_distance: 3.0    # only attempt closures within 3 m of current pose
+    loop_match_minimum_chain_size: 5     # need at least 5 linked scans to attempt a closure
+    loop_match_minimum_response_coarse: 0.35
+    loop_match_minimum_response_fine: 0.45
+
+    # How far the matcher searches in x/y/theta to align a new scan to the map. Wider search = more robust to odometry error but slower. 
+    correlation_search_space_dimension: 0.5
+    correlation_search_space_resolution: 0.01
+    correlation_search_space_smear_deviation: 0.1
+
+    # grid cell size in metres. 0.05 (5 cm) 
+    resolution: 0.05
+
+    # How often (seconds) to publish the map and the map->odom transform
+    map_update_interval: 0.5
+    transform_publish_period: 0.02       # 50 Hz map->odom TF
+
+    
+    max_laser_range: 12.0 # C1 max laser range (match for a small sim to real gap)
+    min_laser_range: 0.05
+
+    
+    
+    throttle_scans: 1
+    
+    enable_interactive_mode: true
+    
+    tf_buffer_duration: 30.0
+    stack_size_to_use: 40000000

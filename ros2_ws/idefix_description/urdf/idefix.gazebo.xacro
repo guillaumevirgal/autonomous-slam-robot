@@ -1,0 +1,104 @@
+<?xml version="1.0"?>
+<robot xmlns:xacro="http://www.ros.org/wiki/xacro">
+    <xacro:property name="lidar_samples"       value="360"/> <!-- TODO : 500 samples per revolution with the real C1 Lidar -->
+    <xacro:property name="lidar_rate_hz"       value="10"/>
+    <xacro:property name="lidar_range_min"     value="0.05"/>
+    <xacro:property name="lidar_range_max"     value="12.0"/>
+    <xacro:property name="lidar_range_stddev"  value="0.005"/> <!-- TODO : Bench measure -->
+
+    <xacro:property name="imu_rate_hz"         value="100"/>
+    <xacro:property name="imu_gyro_stddev"     value="0.0"/>
+    <xacro:property name="imu_accel_stddev"    value="0.0"/>
+
+
+  <gazebo reference="left_wheel">
+    <mu1>1.0</mu1> <!-- mu the friction coef. -->
+    <mu2>1.0</mu2> <!-- wheels friction high grip so they don't slip -->
+  </gazebo>
+  <gazebo reference="right_wheel">
+    <mu1>1.0</mu1> <!-- mu1 = friction in the rolling direction -->
+    <mu2>1.0</mu2> <!-- mu2 = friction in the lateral direction -->
+  </gazebo>
+
+  <gazebo reference="front_caster">
+    <mu1>0.0</mu1>   <!-- caster frictionless so it slides instead of catching -->
+    <mu2>0.0</mu2>
+  </gazebo>
+
+  <gazebo reference="lidar_link">
+  <sensor name="rplidar_c1" type="gpu_lidar">
+    <topic>scan</topic>
+    <update_rate>${lidar_rate_hz}</update_rate>
+    <ignition_frame_id>lidar_link</ignition_frame_id>
+    <alwaysOn>true</alwaysOn>
+    <visualize>true</visualize>
+    <lidar>
+      <scan>
+        <horizontal>
+          <samples>${lidar_samples}</samples>
+          <resolution>1</resolution>
+          <min_angle>-3.14159</min_angle>
+          <max_angle>3.14159</max_angle>
+        </horizontal>
+      </scan>
+      <range>
+        <min>${lidar_range_min}</min>
+        <max>${lidar_range_max}</max>
+        <resolution>0.01</resolution>
+      </range>
+      <noise>
+        <type>gaussian</type>
+        <mean>0.0</mean>
+        <stddev>${lidar_range_stddev}</stddev>
+      </noise>
+    </lidar>
+  </sensor>
+  </gazebo>
+
+<gazebo reference="imu_link">
+  <sensor name="mpu6050" type="imu">
+    <topic>imu</topic>
+    <update_rate>${imu_rate_hz}</update_rate>
+    <ignition_frame_id>imu_link</ignition_frame_id>
+    <alwaysOn>true</alwaysOn>
+    <imu>
+      <angular_velocity>
+        <x><noise type="gaussian"><mean>0.0</mean><stddev>${imu_gyro_stddev}</stddev></noise></x>
+        <y><noise type="gaussian"><mean>0.0</mean><stddev>${imu_gyro_stddev}</stddev></noise></y>
+        <z><noise type="gaussian"><mean>0.0</mean><stddev>${imu_gyro_stddev}</stddev></noise></z>
+      </angular_velocity>
+      <linear_acceleration>
+        <x><noise type="gaussian"><mean>0.0</mean><stddev>${imu_accel_stddev}</stddev></noise></x>
+        <y><noise type="gaussian"><mean>0.0</mean><stddev>${imu_accel_stddev}</stddev></noise></y>
+        <z><noise type="gaussian"><mean>0.0</mean><stddev>${imu_accel_stddev}</stddev></noise></z>
+      </linear_acceleration>
+    </imu>
+  </sensor>
+</gazebo>
+
+  <!-- ===== diff-drive + joint states ===== -->
+  <gazebo>
+    <plugin filename="libignition-gazebo-diff-drive-system.so"
+            name="ignition::gazebo::systems::DiffDrive">
+      <left_joint>left_wheel_joint</left_joint>
+      <right_joint>right_wheel_joint</right_joint>
+      <wheel_separation>${track_width}</wheel_separation>
+      <wheel_radius>${wheel_radius}</wheel_radius>
+      <odom_publish_frequency>50</odom_publish_frequency> <!-- Default value, optional -->
+      <max_linear_acceleration>1.0</max_linear_acceleration>
+      <topic>cmd_vel</topic>
+      <odom_topic>odom</odom_topic> <!-- Topic system publish on to receive command; Default value, optional -->
+      <frame_id>odom</frame_id> <!-- origin of the odometry transform; Default value, optional -->
+      <child_frame_id>base_footprint</child_frame_id>
+      <tf_topic>/tf</tf_topic> <!-- Default value, optional -->
+    </plugin>
+
+    <plugin filename="libignition-gazebo-joint-state-publisher-system.so"
+            name="ignition::gazebo::systems::JointStatePublisher">
+      <topic>joint_states</topic> 
+      <joint_name>left_wheel_joint</joint_name>
+      <joint_name>right_wheel_joint</joint_name>
+    </plugin>
+  </gazebo>
+
+</robot>

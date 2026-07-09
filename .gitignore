@@ -1,0 +1,31 @@
+# ROS2 / colcon build artifacts (these live in ~/robot_ws, not the repo, but just in case)
+build/
+install/
+log/
+
+# Python
+__pycache__/
+*.pyc
+*.egg-info/
+
+# Editor
+.vscode/
+.idea/
+*.swp
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Large binary artefacts
+*.mp4
+*.mov
+media/*.mp4
+maps/*.pgm
+maps/*.data
+maps/*.posegraph
+
+# Rosbags (never commit)
+bags/
+*.db3
+*.mcap

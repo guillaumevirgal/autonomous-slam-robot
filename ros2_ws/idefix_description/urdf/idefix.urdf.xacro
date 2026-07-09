@@ -1,0 +1,225 @@
+<?xml version="1.0"?>
+<robot xmlns:xacro="http://www.ros.org/wiki/xacro" name="idefix">
+
+
+  <!-- ===== MEASURED on the real parts (calipers) ===== -->
+  <xacro:property name="wheel_radius"  value="0.022"/>   <!-- 44 mm dia -->
+  <xacro:property name="wheel_width"   value="0.017"/>
+  <xacro:property name="track_width"   value="0.216"/>   <!-- TODO measure contact-to-contact on assembly; = plugin wheel_separation -->
+
+  <!-- ===== CHASSIS (radius is corrected diameter/2; confirm after measuring motor length) ===== -->
+  <xacro:property name="base_radius"    value="0.125"/>  <!-- ~250 mm plate -->
+  <xacro:property name="floor_thickness" value="0.003"/>
+  <xacro:property name="floor_gap"      value="0.045"/>  <!-- placeholder; tallest floor-1 item sets this -->
+
+  <!-- ===== CASTER (single front, placeholder; height must equal wheel_radius) ===== -->
+  <xacro:property name="caster_radius"  value="0.014"/>
+  <xacro:property name="caster_offset_x" value="0.110"/> <!-- TODO finalize -->
+
+  <!-- ===== MASSES (weigh each on a kitchen scale before Gazebo) ===== -->
+  <xacro:property name="base_mass"   value="0.450"/>   <!-- three PLA floors + standoffs -->
+  <xacro:property name="wheel_mass"  value="0.018"/>
+  <xacro:property name="caster_mass" value="0.037"/>
+  <xacro:property name="lidar_mass"  value="0.110"/>
+  <xacro:property name="camera_mass" value="0.063"/>
+  <xacro:property name="pcb_mass"  value="0.086"/>  <!-- PCB + ESP32 + IMU assembly -->
+  <xacro:property name="lipo_mass" value="0.174"/>  <!-- 3S LiPo -->
+
+  <!-- ===== inertia macros (will move to inertial_macros.xacro later) ===== -->
+  <xacro:macro name="cylinder_inertia" params="m r h">
+    <inertia ixx="${(1.0/12.0)*m*(3*r*r + h*h)}" ixy="0" ixz="0"
+             iyy="${(1.0/12.0)*m*(3*r*r + h*h)}" iyz="0"
+             izz="${0.5*m*r*r}"/>
+  </xacro:macro>
+  <xacro:macro name="sphere_inertia" params="m r">
+    <inertia ixx="${(2.0/5.0)*m*r*r}" ixy="0" ixz="0"
+             iyy="${(2.0/5.0)*m*r*r}" iyz="0" izz="${(2.0/5.0)*m*r*r}"/>
+  </xacro:macro>
+  <xacro:macro name="box_inertia" params="m x y z">
+    <inertia ixx="${(1.0/12.0)*m*(y*y + z*z)}" ixy="0" ixz="0"
+             iyy="${(1.0/12.0)*m*(x*x + z*z)}" iyz="0"
+             izz="${(1.0/12.0)*m*(x*x + y*y)}"/>
+  </xacro:macro>
+
+  <!-- ===== frames ===== -->
+  <link name="base_footprint"/>
+
+  <joint name="base_joint" type="fixed">
+    <parent link="base_footprint"/>
+    <child link="base_link"/>
+    <origin xyz="0 0 ${wheel_radius}" rpy="0 0 0"/>  <!-- base_link at axle height = rotation centre -->
+  </joint>
+
+  <!-- base_link carries all three floors as visuals; sensors mount to base_link -->
+  <link name="base_link">
+    <!-- floor 1 -->
+    <visual>
+      <origin xyz="0 0 0"/>
+      <geometry><cylinder radius="${base_radius}" length="${floor_thickness}"/></geometry>
+      <material name="grey"><color rgba="0.3 0.3 0.3 1"/></material>
+    </visual>
+    <collision>
+      <origin xyz="0 0 0"/>
+      <geometry><cylinder radius="${base_radius}" length="${floor_thickness}"/></geometry>
+    </collision>
+    <!-- floor 2 -->
+    <visual>
+      <origin xyz="0 0 ${floor_gap}"/>
+      <geometry><cylinder radius="${base_radius}" length="${floor_thickness}"/></geometry>
+      <material name="grey"/>
+    </visual>
+    <collision>
+      <origin xyz="0 0 ${floor_gap}"/>
+      <geometry><cylinder radius="${base_radius}" length="${floor_thickness}"/></geometry>
+    </collision>
+    <!-- floor 3 (smaller, lidar deck) -->
+    <visual>
+      <origin xyz="0 0 ${2*floor_gap}"/>
+      <geometry><cylinder radius="${base_radius*0.6}" length="${floor_thickness}"/></geometry>
+      <material name="grey"/>
+    </visual>
+    <collision>
+      <origin xyz="0 0 ${2*floor_gap}"/>
+      <geometry><cylinder radius="${base_radius*0.6}" length="${floor_thickness}"/></geometry>
+    </collision>
+    <inertial>
+      <origin xyz="0 0 ${floor_gap}"/>
+      <mass value="${base_mass}"/>
+      <xacro:cylinder_inertia m="${base_mass}" r="${base_radius}" h="${2*floor_gap}"/>
+    </inertial>
+  </link>
+
+  <!-- ===== wheels (continuous, axis y, tipped onto y) ===== -->
+  <xacro:macro name="wheel" params="prefix y_sign">
+    <link name="${prefix}_wheel">
+      <visual>
+        <origin xyz="0 0 0" rpy="${pi/2} 0 0"/>
+        <geometry><cylinder radius="${wheel_radius}" length="${wheel_width}"/></geometry>
+        <material name="orange"><color rgba="1 0.5 0 1"/></material>
+      </visual>
+      <collision>
+        <origin xyz="0 0 0" rpy="${pi/2} 0 0"/>
+        <geometry><cylinder radius="${wheel_radius}" length="${wheel_width}"/></geometry>
+      </collision>
+      <inertial>
+        <origin xyz="0 0 0" rpy="${pi/2} 0 0"/>
+        <mass value="${wheel_mass}"/>
+        <xacro:cylinder_inertia m="${wheel_mass}" r="${wheel_radius}" h="${wheel_width}"/>
+      </inertial>
+    </link>
+    <joint name="${prefix}_wheel_joint" type="continuous">
+      <parent link="base_link"/>
+      <child link="${prefix}_wheel"/>
+      <origin xyz="0 ${y_sign*track_width/2} 0" rpy="0 0 0"/>
+      <axis xyz="0 1 0"/>
+    </joint>
+  </xacro:macro>
+
+  <xacro:wheel prefix="left"  y_sign="1"/>
+  <xacro:wheel prefix="right" y_sign="-1"/>
+
+  <!-- ===== front caster (placeholder single; enable rear block if lab has a second) ===== -->
+  <link name="front_caster">
+    <visual>
+      <geometry><sphere radius="${caster_radius}"/></geometry>
+      <material name="darkgrey"><color rgba="0.2 0.2 0.2 1"/></material>
+    </visual>
+    <collision><geometry><sphere radius="${caster_radius}"/></geometry></collision>
+    <inertial>
+      <mass value="${caster_mass}"/>
+      <xacro:sphere_inertia m="${caster_mass}" r="${caster_radius}"/>
+    </inertial>
+  </link>
+  <joint name="front_caster_joint" type="fixed">
+    <parent link="base_link"/>
+    <child link="front_caster"/>
+    <origin xyz="${caster_offset_x} 0 ${caster_radius - wheel_radius}" rpy="0 0 0"/>
+  </joint>
+
+
+<!-- ===== floor-1 masses (modelled low for an honest CoM); Exact x,y pending CAD ===== -->
+<link name="lipo_link">
+    <visual>
+      <geometry><box size="0.034 0.105 0.024"/></geometry>
+      <material name="blue"><color rgba="0.1 0.2 0.8 1"/></material>
+    </visual>
+    <inertial>
+      <mass value="${lipo_mass}"/>
+      <xacro:box_inertia m="${lipo_mass}" x="0.034" y="0.105" z="0.024"/>
+    </inertial>
+  </link>
+  <joint name="lipo_joint" type="fixed">
+    <parent link="base_link"/>
+    <child link="lipo_link"/>
+    <origin xyz="0.07 0 0.014" rpy="0 0 0"/>  <!-- forward, low, on floor 1 -->
+  </joint>
+
+  <!-- PCB assembly (100x100), central between the motors, on floor 1 -->
+  <link name="pcb_link">
+    <visual>
+      <geometry><box size="0.100 0.100 0.015"/></geometry>
+      <material name="pcbgreen"><color rgba="0.1 0.5 0.1 1"/></material>
+    </visual>
+    <inertial>
+      <mass value="${pcb_mass}"/>
+      <xacro:box_inertia m="${pcb_mass}" x="0.100" y="0.100" z="0.015"/>
+    </inertial>
+  </link>
+  <joint name="pcb_joint" type="fixed">
+    <parent link="base_link"/>
+    <child link="pcb_link"/>
+    <origin xyz="0 0 0.009" rpy="0 0 0"/>  <!-- central, low, on floor 1 -->
+  </joint>
+
+
+  <!-- ===== sensors (all referenced to base_link) ===== -->
+  <link name="lidar_link">
+    <visual>
+      <geometry><cylinder radius="0.035" length="0.04"/></geometry>
+      <material name="black"><color rgba="0 0 0 1"/></material>
+    </visual>
+    <inertial>
+      <mass value="0.001"/> 
+      <inertia ixx="1e-7" ixy="0" ixz="0" iyy="1e-7" iyz="0" izz="1e-7"/>
+    </inertial>
+  </link>
+  <joint name="lidar_joint" type="fixed">
+    <parent link="base_link"/>
+    <child link="lidar_link"/>
+    <origin xyz="0 0 ${2*floor_gap + 0.025}" rpy="0 0 0"/> <!-- scan origin -->
+  </joint>
+
+  <link name="camera_link">
+    <visual>
+      <geometry><box size="0.018 0.091 0.025"/></geometry>
+      <material name="black"/>
+    </visual>
+    <inertial>
+      <mass value="0.001"/> 
+      <inertia ixx="1e-7" ixy="0" ixz="0" iyy="1e-7" iyz="0" izz="1e-7"/>
+    </inertial>
+  </link>
+  <joint name="camera_joint" type="fixed">
+    <parent link="base_link"/>
+    <child link="camera_link"/>
+    <origin xyz="${base_radius - 0.015} 0 ${floor_gap}" rpy="0 0 0"/> <!-- front edge, floor 2 -->
+  </joint>
+
+  <link name="imu_link">
+    <visual>
+      <geometry><box size="0.02 0.02 0.003"/></geometry>
+      <material name="green"><color rgba="0 0.6 0 1"/></material>
+    </visual>
+    <inertial>
+      <mass value="0.001"/> <!-- Mass already included in the PCB -->
+      <inertia ixx="1e-7" ixy="0" ixz="0" iyy="1e-7" iyz="0" izz="1e-7"/>
+    </inertial>
+  </link>
+  <joint name="imu_joint" type="fixed">
+    <parent link="base_link"/>
+    <child link="imu_link"/>
+    <origin xyz="0.05 0.05 0.015" rpy="0 0 0"/> <!-- TODO measure posotion on the PCB, floor 1 -->
+  </joint>
+  <xacro:include filename="idefix.gazebo.xacro"/>
+
+</robot>
