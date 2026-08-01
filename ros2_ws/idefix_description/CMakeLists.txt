@@ -1,7 +1,7 @@
 cmake_minimum_required(VERSION 3.8)
 project(idefix_description)
 
-install(DIRECTORY urdf launch rviz meshes
+install(DIRECTORY urdf launch rviz
   DESTINATION share/${PROJECT_NAME}/
 )
 
