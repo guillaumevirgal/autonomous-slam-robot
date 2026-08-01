@@ -88,3 +88,13 @@ maps/*.posegraph
 bags/
 *.db3
 *.mcap
+
+managed_components/
+sdkconfig.old
+
+# Windows Zone.Identifier alternate data streams (WSL2 cross-filesystem)
+*:Zone.Identifier
+
+# Large logic analyzer captures (small validation captures may be committed)
+
+
