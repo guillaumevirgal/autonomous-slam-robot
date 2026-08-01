@@ -1,0 +1,120 @@
+/* Bench harness for the motor + encoder + PID modules.
+No micro-ROS yet. Goal: spin one motor under closed-loop velocity control and log the result as CSV over USB serial.
+
+How to build (from the project root):
+ idf.py set-target esp32s3
+ idf.py build
+ idf.py -p /dev/ttyACM0 flash monitor
+*/
+
+#include "motor.h"
+#include "encoder.h"
+#include "pid.h"
+
+#include "freertos/FreeRTOS.h"
+#include "freertos/task.h"
+#include "esp_log.h"
+#include "esp_timer.h"
+
+#include <stdio.h>
+
+static const char *TAG = "main";
+
+// Control loop period. 10 ms
+#define CONTROL_PERIOD_MS   10    // 10 ms period = 100 Hz control loop
+#define LOG_EVERY_N_TICKS   10    // log once every 10 ticks = 10 Hz CSV output
+
+// Square-wave setpoint generator. Change these to explore the loop. 
+#define SETPOINT_MAGNITUDE_RAD_S  0.2f // target speed magnitude
+#define SETPOINT_HALF_PERIOD_MS   3000 // flip direction every 3 seconds
+
+// Starting PID gains 
+#define KP_START   0.05f // Output is duty in [-1, 1], so kp = 0.05 means 1 rad/s of error -> 5% duty.
+#define KI_START   0.0f
+#define KD_START   0.0f
+
+static void control_task(void *arg)
+{
+    pid_t pid_a; // Create and initialize the PID controller for motor A.
+    pid_init(&pid_a,
+             KP_START, KI_START, KD_START, // gains
+             -1.0f, 1.0f,                  // output clamp (duty range)
+             -10.0f, 10.0f);               // integral clamp (anti-windup)
+
+    TickType_t last_wake = xTaskGetTickCount(); // Record the tick count "now" as the baseline for periodic wakeups
+    const TickType_t period = pdMS_TO_TICKS(CONTROL_PERIOD_MS); // Convert the control period from milliseconds to FreeRTOS ticks
+
+
+    int tick_counter = 0;
+    int64_t start_us = esp_timer_get_time(); // Record the loop start time in microseconds
+
+    while (1) {
+        vTaskDelayUntil(&last_wake, period); // Sleep until last_wake + period
+
+        // Compute the current setpoint (square wave)
+        int64_t now_us = esp_timer_get_time(); // How many microseconds since the loop started
+        int64_t elapsed_ms = (now_us - start_us) / 1000; // Convert to milliseconds
+        int phase = (elapsed_ms / SETPOINT_HALF_PERIOD_MS) & 1; // Figure out which half-period we are in (0 or 1)
+        
+        float setpoint_a;
+        if (phase == 0) { // phase 0 -> +magnitude
+            setpoint_a = SETPOINT_MAGNITUDE_RAD_S;
+        } else { // phase 1 -> -magnitude
+            setpoint_a = -SETPOINT_MAGNITUDE_RAD_S;
+        }
+
+        /* Read measured velocity, update PID, write duty. */
+        float measured_a = encoder_read_velocity_rad_s(ENCODER_A);
+        float dt = (float)CONTROL_PERIOD_MS / 1000.0f; // The loop period in seconds, for the PID's dt argument
+        float duty_a = pid_update(&pid_a, setpoint_a, measured_a, dt); // Compute the new duty from the PID controller
+        motor_set_duty(MOTOR_A, duty_a); // Apply the duty to motor A
+
+        /* TODO: uncomment when moving to two-motor control.
+         * float measured_b = encoder_read_velocity_rad_s(ENCODER_B);
+         * float duty_b = pid_update(&pid_b, setpoint_b, measured_b, dt);
+         * motor_set_duty(MOTOR_B, duty_b);
+         */
+
+        // Log CSV at 10 Hz
+        tick_counter = tick_counter + 1;
+        if (tick_counter >= LOG_EVERY_N_TICKS) { // Increment the log counter; only print when it reaches the limit
+            tick_counter = 0;
+            printf("%lld,%.3f,%.3f,%.3f\n",
+                   elapsed_ms,
+                   setpoint_a,
+                   measured_a,
+                   duty_a);
+        }
+    }
+}
+
+void app_main(void)
+{
+    ESP_LOGI(TAG, "Idefix bench firmware starting");
+
+    
+    ESP_ERROR_CHECK(motor_init_all());   // Bring up the motors
+    ESP_ERROR_CHECK(encoder_init_all()); // Bring up the encoders
+
+    // CSV header
+    printf("t_ms,setpoint_rad_s,measured_rad_s,duty\n");
+
+    // Create the control task pinned to core 1 
+    // Core 0 handles Wi-Fi and micro-ROS, which have variable timing. Pinning the control loop to core 1 keeps it deterministic.
+    BaseType_t ok = xTaskCreatePinnedToCore(
+        control_task,   // function to run
+        "control",      // task name (for debugging)
+        4096,           // stack size in bytes
+        NULL,           // no argument passed to the task
+        5,              // priority (higher = more urgent)
+        NULL,           // we do not need the task handle
+        1);             // core 1
+
+    if (ok != pdPASS) {
+        ESP_LOGE(TAG, "failed to create control task");
+        return;
+    }
+
+    ESP_LOGI(TAG, "control task running on core 1 at %d Hz",
+             1000 / CONTROL_PERIOD_MS);
+}

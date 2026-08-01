@@ -1,0 +1,95 @@
+// main_openloop_test.c
+// STAGE 1 diagnostic: open-loop motor sign check. NO PID.
+//
+// Purpose: command a small FIXED duty to motor A and observe (a) which
+// way the wheel physically turns and (b) what sign `measured` reports.
+// This resolves the encoder/motor sign conventions before we ever close
+// the control loop.
+//
+// Safety: duty is small (0.15) so speed and current stay low even if a
+// sign is backwards. Keep wheels off the ground. Keep a hand on the LiPo
+// connector as your kill switch (the slide switch does NOT disconnect
+// load on this board due to the P-MOSFET body diode).
+//
+// What you will see per line: t_ms, commanded_duty, measured_rad_s
+//
+// The test cycles: 3 s of +0.15 duty, 3 s of 0 (coast), 3 s of -0.15,
+// 3 s of 0, repeat. Watch the +0.15 phase: note wheel direction and the
+// sign of measured.
+
+#include "motor.h"
+#include "encoder.h"
+
+#include "freertos/FreeRTOS.h"
+#include "freertos/task.h"
+#include "esp_log.h"
+#include "esp_timer.h"
+
+#include <stdio.h>
+
+static const char *TAG = "openloop";
+
+#define CONTROL_PERIOD_MS   10       // 100 Hz loop
+#define LOG_EVERY_N_TICKS   10       // 10 Hz logging
+
+#define TEST_DUTY           0.15f    // small, safe fixed duty
+#define PHASE_MS            3000      // 3 s per phase
+
+static void control_task(void *arg)
+{
+    TickType_t last_wake = xTaskGetTickCount();
+    const TickType_t period = pdMS_TO_TICKS(CONTROL_PERIOD_MS);
+
+    int tick_counter = 0;
+    int64_t start_us = esp_timer_get_time();
+
+    while (1) {
+        vTaskDelayUntil(&last_wake, period);
+
+        // Figure out which phase we are in: 0=+duty, 1=coast, 2=-duty, 3=coast.
+        int64_t now_us = esp_timer_get_time();
+        int64_t elapsed_ms = (now_us - start_us) / 1000;
+        int phase = (elapsed_ms / PHASE_MS) % 4;
+
+        // Choose the commanded duty for this phase.
+        float duty_a;
+        if (phase == 0) {
+            duty_a = TEST_DUTY;      // positive: note wheel direction + measured sign
+        } else if (phase == 2) {
+            duty_a = -TEST_DUTY;     // negative
+        } else {
+            duty_a = 0.0f;           // coast between, so motion is unambiguous
+        }
+
+        // Command motor A directly. NO PID. Motor B left untouched (stopped).
+        motor_set_duty(MOTOR_A, duty_a);
+
+        // Read the encoder so we can see the sign relationship.
+        float measured_a = encoder_read_velocity_rad_s(ENCODER_A);
+
+        // Log at 10 Hz: time, commanded duty, measured velocity.
+        tick_counter = tick_counter + 1;
+        if (tick_counter >= LOG_EVERY_N_TICKS) {
+            tick_counter = 0;
+            printf("%lld,%.3f,%.3f\n", elapsed_ms, duty_a, measured_a);
+        }
+    }
+}
+
+void app_main(void)
+{
+    ESP_LOGI(TAG, "STAGE 1 open-loop motor sign check starting");
+    ESP_LOGI(TAG, "duty cycles +0.15 / coast / -0.15 / coast, 3s each");
+
+    ESP_ERROR_CHECK(motor_init_all());
+    ESP_ERROR_CHECK(encoder_init_all());
+
+    // Make sure motor B stays stopped for this test.
+    motor_set_duty(MOTOR_B, 0.0f);
+
+    printf("t_ms,commanded_duty,measured_rad_s\n");
+
+    xTaskCreatePinnedToCore(control_task, "control", 4096, NULL, 5, NULL, 1);
+
+    ESP_LOGI(TAG, "control task running");
+}
