@@ -4,6 +4,7 @@
 slam_toolbox:
   ros__parameters:
     use_sim_time: true
+    use_lifecycle_manager: false
 
     # Solver
     solver_plugin: solver_plugins::CeresSolver

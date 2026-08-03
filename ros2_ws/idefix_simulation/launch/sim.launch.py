@@ -1,4 +1,4 @@
-##  starts Gazebo with ign gazebo directly
+##  starts Gazebo with gz sim directly
 import os
 from ament_index_python.packages import get_package_share_directory
 from launch import LaunchDescription
@@ -37,7 +37,7 @@ def generate_launch_description():
         parameters=[{'robot_description': robot_description, 'use_sim_time': True}])
 
     gazebo = ExecuteProcess(
-        cmd=['ign', 'gazebo', '-r', world_path], output='screen')
+        cmd=['gz', 'sim', '-r', world_path], output='screen')
 
     spawn = Node(
         package='ros_gz_sim', executable='create', output='screen',
