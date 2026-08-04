@@ -3,12 +3,16 @@
 <package format="3">
   <name>idefix_bringup</name>
   <version>0.0.0</version>
-  <description>TODO: Package description</description>
-  <maintainer email="guillaume@todo.todo">guillaume</maintainer>
+  <description>Top-level bring-up for Idefix: launch files, RViz configs and parameter files that combine the base, description and simulation packages into runnable systems (teleop, SLAM, Nav2) in simulation and on real hardware.</description>
+  <maintainer email="guillaume.vrg94@gmail.com">Guillaume Virgal</maintainer>
   <license>Apache-2.0</license>
 
   <exec_depend>idefix_base</exec_depend>
   <exec_depend>ros2launch</exec_depend>
+  <exec_depend>slam_toolbox</exec_depend>
+  <exec_depend>nav2_bringup</exec_depend>
+  <exec_depend>teleop_twist_keyboard</exec_depend>
+  <exec_depend>rviz2</exec_depend>
 
   <test_depend>ament_copyright</test_depend>
   <test_depend>ament_flake8</test_depend>

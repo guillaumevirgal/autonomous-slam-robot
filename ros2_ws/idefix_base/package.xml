@@ -4,7 +4,7 @@
   <name>idefix_base</name>
   <version>0.0.0</version>
   <description>TODO: Package description</description>
-  <maintainer email="guillaume@todo.todo">guillaume</maintainer>
+  <maintainer email="guillaume.vrg94@gmail.com">guillaume</maintainer>
   <license>Apache-2.0</license>
 
   <depend>rclpy</depend>
