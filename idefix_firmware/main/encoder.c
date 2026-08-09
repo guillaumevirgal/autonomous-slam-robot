@@ -69,7 +69,7 @@ static bool IRAM_ATTR pcnt_watch_cb(pcnt_unit_handle_t unit, const pcnt_watch_ev
 Sets up 4x quadrature decoding, glitch filtering, watch points, and starts the counter. Called once per encoder from encoder_init_all().
 */
 
-static esp_err_t configure_pcnt(encoder_ctx_t *enc, gpio_num_t cha, gpio_num_t chb){
+static esp_err_t configure_pcnt(encoder_ctx_t *enc, gpio_num_t cha, gpio_num_t chb, bool invert){
     
     pcnt_unit_config_t unit_cfg = {0};
     unit_cfg.high_limit = PCNT_HIGH_LIMIT;         // upper watch point
@@ -157,7 +157,7 @@ static esp_err_t configure_pcnt(encoder_ctx_t *enc, gpio_num_t cha, gpio_num_t c
     enc->accumulator       = 0;                        // start at zero
     enc->last_read_counts  = 0;                        // no previous read yet
     enc->last_read_time_us = esp_timer_get_time();     // record now as "last time"
-    enc->invert_direction  = false;                    // no sign flip by default
+    enc->invert_direction  = invert;                   // sign flip
  
     return ESP_OK;
 }
@@ -168,13 +168,15 @@ esp_err_t encoder_init_all(void)
     // Configure encoder A using its two GPIO pins from pins.h
     esp_err_t err_a = configure_pcnt(&s_encoders[ENCODER_A],
                                      ENCODER_A_CHA_GPIO,
-                                     ENCODER_A_CHB_GPIO);
+                                     ENCODER_A_CHB_GPIO,
+                                     true);
     ESP_ERROR_CHECK(err_a);
  
     // Configure encoder B likewise
     esp_err_t err_b = configure_pcnt(&s_encoders[ENCODER_B],
                                      ENCODER_B_CHA_GPIO,
-                                     ENCODER_B_CHB_GPIO);
+                                     ENCODER_B_CHB_GPIO,
+                                     false);
     ESP_ERROR_CHECK(err_b);
  
     // Print a friendly message so we know init succeeded

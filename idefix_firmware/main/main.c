@@ -63,15 +63,17 @@ static void control_task(void *arg)
 
         // Command motor A directly. NO PID. Motor B left untouched (stopped).
         motor_set_duty(MOTOR_A, duty_a);
+        motor_set_duty(MOTOR_B, duty_a);
 
         // Read the encoder so we can see the sign relationship.
         float measured_a = encoder_read_velocity_rad_s(ENCODER_A);
+        float measured_b = encoder_read_velocity_rad_s(ENCODER_B);
 
         // Log at 10 Hz: time, commanded duty, measured velocity.
         tick_counter = tick_counter + 1;
         if (tick_counter >= LOG_EVERY_N_TICKS) {
             tick_counter = 0;
-            printf("%lld,%.3f,%.3f\n", elapsed_ms, duty_a, measured_a);
+            printf("%lld,%.3f,%.3f,%.3f\n", elapsed_ms, duty_a, measured_a, measured_b);
         }
     }
 }
@@ -87,7 +89,7 @@ void app_main(void)
     // Make sure motor B stays stopped for this test.
     motor_set_duty(MOTOR_B, 0.0f);
 
-    printf("t_ms,commanded_duty,measured_rad_s\n");
+    printf("t_ms,commanded_duty,measured_a_rad_s,measured_b_rad_s\n");
 
     xTaskCreatePinnedToCore(control_task, "control", 4096, NULL, 5, NULL, 1);
 

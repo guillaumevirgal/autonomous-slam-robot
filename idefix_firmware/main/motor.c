@@ -104,7 +104,7 @@ esp_err_t motor_init_all(void) //initialize both motors
     // Configure motor A
     s_motors[MOTOR_A].in1_gpio         = MOTOR_A_IN1_GPIO; // store its IN1 pin
     s_motors[MOTOR_A].in2_gpio         = MOTOR_A_IN2_GPIO; // store its IN2 pin
-    s_motors[MOTOR_A].invert_direction = false;            // no sign flip by default
+    s_motors[MOTOR_A].invert_direction = true;            // no sign flip by default
     ESP_ERROR_CHECK(configure_direction_pins(MOTOR_A_IN1_GPIO, MOTOR_A_IN2_GPIO));  // Set up the direction pins for motor A
     ESP_ERROR_CHECK(configure_mcpwm(&s_motors[MOTOR_A], MOTOR_A_PWM_GPIO));  // Set up the MCPWM pin for motor A
 
