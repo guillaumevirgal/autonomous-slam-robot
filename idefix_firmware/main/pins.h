@@ -7,6 +7,9 @@ Every GPIO number in the firmware lives here. No other file hardcodes a pin.
 
 #pragma once
 
+#include "driver/uart.h"
+
+
 // Motor A (left wheel)
 #define MOTOR_A_PWM_GPIO   15   // PWMA -> TB6612FNG PWMA input 
 #define MOTOR_A_IN1_GPIO   17   // AIN1 -> TB6612FNG AIN1 
@@ -27,3 +30,11 @@ Every GPIO number in the firmware lives here. No other file hardcodes a pin.
 // Encoder B (paired with Motor B) 
 #define ENCODER_B_CHA_GPIO 13   // Encoder B channel A (quadrature) C1U2
 #define ENCODER_B_CHB_GPIO 14   // Encoder B channel B (quadrature) C2U2
+
+
+
+// USB-C connector is wired to an onboard USB-to-UART bridge chip
+#define UROS_UART_NUM       UART_NUM_0    // hard-wired to the onboard USB-UART bridge chip
+#define UROS_UART_TX_GPIO   43            // U0TXD, fixed by the DevKitC-1 board layout
+#define UROS_UART_RX_GPIO   44            // U0RXD, fixed by the DevKitC-1 board layout
+#define UROS_UART_BAUDRATE  460800        // start rate; move to 921600 once the pipeline is stable

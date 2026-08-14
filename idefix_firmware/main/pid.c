@@ -43,11 +43,6 @@ float pid_update(pid_t *pid, float setpoint, float measurement, float dt){
     // P term
     float p_term = pid->kp * error;
 
-    // I term
-    pid->integral += error * dt;
-    pid->integral = clamp(pid->integral, pid->integral_min, pid->integral_max);
-    float i_term = pid->ki * pid->integral;
-
     // D term 
     float d_term = 0.0f;
     if (pid->has_prev_measurement) {
@@ -56,6 +51,24 @@ float pid_update(pid_t *pid, float setpoint, float measurement, float dt){
     }
     pid->prev_measurement = measurement; // Save this measurement for the next call's derivative
     pid->has_prev_measurement = true;
+
+    // I term (Conditional integration)
+    float tentative_integral = pid->integral + error * dt;
+    tentative_integral = clamp(tentative_integral, pid->integral_min, pid->integral_max); 
+    float tentative_i_term = pid->ki * tentative_integral;
+    float tentative_output = p_term + tentative_i_term + d_term;
+
+    // Would the tentative output saturate in the same direction as error?
+    bool saturating_high = (tentative_output >= pid->out_max) && (error > 0.0f); // trying to go up, already at ceiling
+    bool saturating_low  = (tentative_output <= pid->out_min) && (error < 0.0f); // trying to go down, already at floor
+    bool hold_integrator = saturating_high || saturating_low; // The integral would saturate
+
+    if (!hold_integrator) { 
+        pid->integral = tentative_integral; // Add the integral
+    } // else: hold the integrator at its previous value
+
+    // Recompute the i_term with the (possibly held) integral
+    float i_term = pid->ki * pid->integral;
 
     // Combine the 3 terms
     float output = p_term + i_term + d_term;

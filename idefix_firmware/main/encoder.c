@@ -24,11 +24,6 @@
 
 static const char *TAG = "encoder"; // A tag string used by ESP_LOG functions to prefix log messages.
 
-// Encoder mechanical constants
-#define ENCODER_PULSES_PER_MOTOR_REV    7 // 7 pulses per motor-shaft revolution per channel
-#define ENCODER_QUAD_MULTIPLIER         4 // 4x quadrature decoding (both edges, both channels)
-#define ENCODER_GEAR_RATIO              150 // 150:1 gearbox reduction
-#define ENCODER_COUNTS_PER_OUTPUT_REV   (ENCODER_PULSES_PER_MOTOR_REV * ENCODER_QUAD_MULTIPLIER * ENCODER_GEAR_RATIO) // COUNTS_PER_OUTPUT_REV = 7 * 4 * 150 = 4200
 
 // PCNT hardware counter on the S3 is signed 16-bit (-32768..+32767). Choosing +/-30000 gives 2768 counts of margin, which at 10 kHz edge rate is 276 milliseconds.
 #define PCNT_HIGH_LIMIT   30000 

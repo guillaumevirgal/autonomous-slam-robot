@@ -7,8 +7,11 @@
  * measurements and checking the output.
  *
  * Features:
- *   - Anti-windup via integral clamping (Ki term saturates
- *     independently of output saturation).
+ *   - Anti-windup via CONDITIONAL INTEGRATION (primary): integrator only
+ *     accumulates when the output is not saturating in the same direction
+ *     as the current error. Prevents wind-up during output saturation.
+ *   - Integral clamp (belt-and-braces): additional bound on the accumulated
+ *     integral term to catch pathological cases (stalled plant, huge dt).
  *   - Derivative-on-measurement (not on error): avoids "derivative
  *     kick" when the setpoint changes stepwise, which is exactly what
  *     Nav2 will do when new /cmd_vel commands arrive.
