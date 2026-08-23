@@ -26,6 +26,7 @@ setup(
         'console_scripts': [
             'velocity_commander = idefix_base.velocity_commander:main',
             'odom_reporter = idefix_base.odom_reporter:main',
+            'odom_tf_broadcaster = idefix_base.odom_tf_broadcaster:main',
         ],
     },
 )

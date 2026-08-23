@@ -53,7 +53,7 @@ def main(args=None):
     finally:
         node.pub.publish(Twist())       # all-zero command so the robot stops
         node.destroy_node()
-        rclpy.shutdown()
+        rclpy.try_shutdown()
 
 
 if __name__ == '__main__':
