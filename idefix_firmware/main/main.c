@@ -466,15 +466,16 @@ static void uros_task(void *arg){
     rcl_allocator_t allocator = rcl_get_default_allocator();
     rclc_support_t  support;
 
-    // rclc_support_init blocks internally until it can reach the agent over the
-    // configured transport (custom UART). When we first power on, this may
-    // spin for a while if the Pi has not started the agent yet. That is fine
-    // and expected: the ROM bootloader print at 115200 that briefly appears
-    // on the wire during first ~50 ms of boot will not be seen by the agent
-    // until later, and the agent will discard those bytes as framing errors.
-    RCCHECK(rclc_support_init(&support, 0, NULL, &allocator));
+        // Set DDS domain ID to 94 explicitly. rmw_microxrcedds hardcodes
+    // the default to 0 regardless of the RMW_UXRCE_DEFAULT_DOMAIN_ID
+    // CMake flag; must be overridden here to match the Pi's domain.
+    rcl_init_options_t init_options = rcl_get_zero_initialized_init_options();
+    RCCHECK(rcl_init_options_init(&init_options, allocator));
+    RCCHECK(rcl_init_options_set_domain_id(&init_options, 94));
+    RCCHECK(rclc_support_init_with_options(&support, 0, NULL, &init_options, &allocator));
+    RCCHECK(rcl_init_options_fini(&init_options));
 
-    // Node.
+    
     rcl_node_t node;
     RCCHECK(rclc_node_init_default(&node, "idefix_base", "", &support));
 
