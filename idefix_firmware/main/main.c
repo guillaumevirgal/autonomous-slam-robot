@@ -661,7 +661,20 @@ static void uros_task(void *arg){
     rcl_init_options_t init_options = rcl_get_zero_initialized_init_options();
     RCCHECK(rcl_init_options_init(&init_options, allocator));
     RCCHECK(rcl_init_options_set_domain_id(&init_options, 94));
-    RCCHECK(rclc_support_init_with_options(&support, 0, NULL, &init_options, &allocator));
+
+    // Retry the agent handshake instead of RCCHECK's default (delete this
+    // task) on failure. Without this, booting before the agent is up (or
+    // the agent restarting) permanently kills uros_task and nothing short
+    // of a manual chip reset brings it back.
+    rcl_ret_t support_rc;
+    do {
+        support_rc = rclc_support_init_with_options(&support, 0, NULL, &init_options, &allocator);
+        if (support_rc != RCL_RET_OK) {
+            ESP_LOGW(TAG, "micro-ROS agent not reachable, retrying...");
+            vTaskDelay(pdMS_TO_TICKS(1000));
+        }
+    } while (support_rc != RCL_RET_OK);
+
     RCCHECK(rcl_init_options_fini(&init_options));
 
     
