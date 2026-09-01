@@ -38,6 +38,9 @@ def generate_launch_description():
         # Static TF base_link -> laser.
         # z = 0.125 m: deck stack (2 * floor_gap + deck_thickness = 93mm) plus
         # a measured 35mm from deck_3 top to the scan plane, +/- 10mm uncertainty.
+        # yaw = 0: an initial yaw=pi guess (LiDAR "mounted rotated 180 degrees")
+        # was motion-tested and found wrong -- forward-detected objects
+        # appeared behind the robot in the map. No yaw offset is needed.
         Node(
             package='tf2_ros',
             executable='static_transform_publisher',
@@ -45,6 +48,7 @@ def generate_launch_description():
             output='screen',
             arguments=[
                 '--x', '0', '--y', '0', '--z', '0.125',
+                '--yaw', '0', '--pitch', '0', '--roll', '0',
                 '--frame-id', 'base_link',
                 '--child-frame-id', 'laser',
             ],

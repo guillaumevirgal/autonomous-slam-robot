@@ -173,20 +173,24 @@
 
 
   <!-- ===== sensors (all referenced to base_link) ===== -->
-  <link name="lidar_link">
+  <link name="laser">
     <visual>
       <geometry><cylinder radius="0.035" length="0.04"/></geometry>
       <material name="black"><color rgba="0 0 0 1"/></material>
     </visual>
     <inertial>
-      <mass value="0.001"/> 
+      <mass value="0.001"/>
       <inertia ixx="1e-7" ixy="0" ixz="0" iyy="1e-7" iyz="0" izz="1e-7"/>
     </inertial>
   </link>
   <joint name="lidar_joint" type="fixed">
     <parent link="base_link"/>
-    <child link="lidar_link"/>
-    <origin xyz="0 0 ${2*floor_gap + 0.025}" rpy="0 0 0"/> <!-- scan origin -->
+    <child link="laser"/>
+    <!-- Matches idefix_bringup's rplidar_c1.launch.py static transform exactly:
+         93mm deck stack + 35mm measured to the scan-plane slit, +/- 10mm
+         uncertainty. yaw=0: motion-tested on hardware, no rotational offset
+         needed. Keep both in sync. -->
+    <origin xyz="0 0 0.125" rpy="0 0 0"/>
   </joint>
 
   <link name="camera_link">

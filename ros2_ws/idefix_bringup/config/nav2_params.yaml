@@ -95,7 +95,7 @@ global_costmap:
         observation_sources: scan
         scan:
           topic: /scan
-          sensor_frame: lidar_link
+          sensor_frame: laser
           max_obstacle_height: 2.0
           clearing: True
           marking: True
@@ -136,7 +136,7 @@ local_costmap:
         observation_sources: scan
         scan:
           topic: /scan
-          sensor_frame: lidar_link
+          sensor_frame: laser
           max_obstacle_height: 2.0
           clearing: True
           marking: True

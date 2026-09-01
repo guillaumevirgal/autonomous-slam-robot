@@ -1,7 +1,10 @@
 """Odometry-to-TF broadcaster for Idefix.
 
-Subscribes to '/odom' and republishes the pose as an 'odom -> base_link'
-transform on '/tf'. The ESP32 firmware intentionally does NOT publish '/tf':
+Subscribes to '/odom' and republishes the pose as an 'odom -> base_footprint'
+transform on '/tf'. base_footprint, not base_link, matches REP-105: the URDF
+publishes a fixed base_footprint -> base_link joint via robot_state_publisher,
+so base_link must not also get a transform from here or it would have two
+parents in the TF tree. The ESP32 firmware intentionally does NOT publish '/tf':
 tf2_msgs lives in ros2/geometry2 rather than ros2/common_interfaces, and is
 not included in the vendored micro-ROS embedded build. Bringing it in would
 add a fragile dependency for no functional gain. Splitting /odom on the MCU
@@ -31,7 +34,7 @@ class OdomTfBroadcaster(Node):
     # to declared parameters later if the robot is ever namespaced (e.g.
     # multi-robot sim) without changing the callback logic.
     PARENT_FRAME = 'odom'
-    CHILD_FRAME = 'base_link'
+    CHILD_FRAME = 'base_footprint'
     def __init__(self):
         super().__init__('odom_tf_broadcaster')
         # TransformBroadcaster wraps a publisher on /tf with the QoS that
@@ -57,8 +60,8 @@ class OdomTfBroadcaster(Node):
         # rmw_uros_sync_session() at agent handshake, this stamp is in
         # the Pi's ROS time domain.
         t.header.stamp = msg.header.stamp
-        # Frame convention: parent = 'odom', child = 'base_link'. The
-        # odom -> base_link link is the raw odometry estimate; a SLAM
+        # Frame convention: parent = 'odom', child = 'base_footprint'. The
+        # odom -> base_footprint link is the raw odometry estimate; a SLAM
         # node will later publish 'map' -> 'odom' to correct its drift.
         t.header.frame_id = self.PARENT_FRAME
         t.child_frame_id = self.CHILD_FRAME
