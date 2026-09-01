@@ -2,3 +2,7 @@
 	path = idefix_firmware/components/micro_ros_espidf_component
 	url = https://github.com/micro-ROS/micro_ros_espidf_component.git
 	branch = jazzy
+[submodule "ros2_ws/sllidar_ros2"]
+	path = ros2_ws/sllidar_ros2
+	url = https://github.com/Slamtec/sllidar_ros2.git
+	branch = main
