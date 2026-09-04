@@ -4,6 +4,7 @@ idf_component_register(
         "motor.c"
         "encoder.c"
         "pid.c"
+        "imu.c"
         "esp32_serial_transport.c"
     INCLUDE_DIRS "."
     REQUIRES

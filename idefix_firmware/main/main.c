@@ -62,6 +62,11 @@
 #include <geometry_msgs/msg/twist.h>
 #include <nav_msgs/msg/odometry.h>
 #include <geometry_msgs/msg/transform_stamped.h>
+#include <sensor_msgs/msg/imu.h>
+
+// IMU
+#include "imu.h"
+
 
 static const char *TAG = "main";
 
@@ -77,6 +82,10 @@ static const char *TAG = "main";
 // are accurate because we stamp at publish time with rmw_uros_epoch_nanos(),
 // so robot_localization / Nav2 do not care about the arrival jitter.
 #define ODOM_TIMER_PERIOD_MS   33
+
+// /imu publish period: matches imu_task's 100 Hz sample rate 1:1, so every
+// sample gets published with no decimation/loss.
+#define IMU_TIMER_PERIOD_MS    10
 
 // /cmd_vel watchdog: if no message received within this window, force zero
 // setpoints. 500 ms is 10 missed Nav2 controller frames at the default 20 Hz
@@ -120,6 +129,18 @@ static _Atomic int64_t g_snapshot_counts_a = 0;      // raw accumulated encoder 
 static _Atomic int64_t g_snapshot_counts_b = 0;      // raw accumulated encoder counts, right
 static _Atomic int64_t g_snapshot_time_us  = 0;      // esp_timer_get_time() at snapshot
 
+// Written by imu_task, not yet read anywhere (no micro-ROS publish yet).
+// Same snapshot-atomics pattern as the encoder fields above: individual
+// _Atomic fields rather than one atomic struct, since imu_sample_t is
+// larger than a word.
+static _Atomic float   g_imu_accel_x_g    = 0.0f;
+static _Atomic float   g_imu_accel_y_g    = 0.0f;
+static _Atomic float   g_imu_accel_z_g    = 0.0f;
+static _Atomic float   g_imu_gyro_x_dps   = 0.0f;
+static _Atomic float   g_imu_gyro_y_dps   = 0.0f;
+static _Atomic float   g_imu_gyro_z_dps   = 0.0f;
+static _Atomic int64_t g_imu_snapshot_time_us = 0;   // esp_timer_get_time() at snapshot
+
 // -------------------------------------------------------------------------
 // PID and filter state (control_task private)
 // -------------------------------------------------------------------------
@@ -156,7 +177,9 @@ static double odom_wz       = 0.0;                   // rad/s about base_link Z 
 // -------------------------------------------------------------------------
 
 static char frame_odom[8]      = "odom";             // parent frame for /odom and TF
-static char frame_base[16]     = "base_link";        // child frame for /odom 
+static char frame_base[16]     = "base_link";        // child frame for /odom
+static char frame_imu[16]      = "imu_link";         // frame for /imu -- no matching URDF
+                                                      // link/joint exists yet on the Pi side
 
 // -------------------------------------------------------------------------
 // micro-ROS handles and message buffers
@@ -165,10 +188,12 @@ static char frame_base[16]     = "base_link";        // child frame for /odom
 // Handles created once in uros_task at startup.
 static rcl_subscription_t sub_cmd_vel;               // subscribes to /cmd_vel
 static rcl_publisher_t    pub_odom;                  // publishes /odom
+static rcl_publisher_t    pub_imu;                   // publishes /imu
 
 // Message buffers: static so we do not thrash the allocator every tick.
 static geometry_msgs__msg__Twist        msg_cmd_vel; // ingress buffer for /cmd_vel
 static nav_msgs__msg__Odometry          msg_odom;    // egress buffer for /odom
+static sensor_msgs__msg__Imu            msg_imu;     // egress buffer for /imu
 
 // UART port number passed to the transport as `args`. Storage lifetime must
 // outlive the transport session, so it lives at file scope.
@@ -223,6 +248,49 @@ static void fill_time_stamp(builtin_interfaces__msg__Time *stamp){
     int64_t now_ns = rmw_uros_epoch_nanos();         // agent-synced ns since epoch (if synced)
     stamp->sec     = (int32_t)  (now_ns / 1000000000LL);   // whole seconds
     stamp->nanosec = (uint32_t) (now_ns % 1000000000LL);   // remainder ns
+}
+
+// -------------------------------------------------------------------------
+// imu_task: 100 Hz IMU sampling. Independent of control_task and uros_task,
+// touches neither PID/motor state nor micro-ROS. Writes a snapshot of the
+// latest sample into atomics; nothing reads them yet (no micro-ROS publish
+// wired up yet). Logs once a second so the task's liveness and sanity are
+// visible without flooding the console at 100 Hz.
+// -------------------------------------------------------------------------
+
+static void imu_task(void *arg){
+    (void) arg;
+
+    TickType_t last_wake = xTaskGetTickCount();
+    const TickType_t period = pdMS_TO_TICKS(CONTROL_PERIOD_MS);
+    int log_divider = 0;
+
+    while (1) {
+        vTaskDelayUntil(&last_wake, period);
+
+        imu_sample_t sample;
+        esp_err_t err = imu_read(&sample);
+        if (err != ESP_OK) {
+            ESP_LOGW(TAG, "imu_read failed: %s", esp_err_to_name(err));
+            continue;
+        }
+
+        atomic_store(&g_imu_accel_x_g, sample.accel_x_g);
+        atomic_store(&g_imu_accel_y_g, sample.accel_y_g);
+        atomic_store(&g_imu_accel_z_g, sample.accel_z_g);
+        atomic_store(&g_imu_gyro_x_dps, sample.gyro_x_dps);
+        atomic_store(&g_imu_gyro_y_dps, sample.gyro_y_dps);
+        atomic_store(&g_imu_gyro_z_dps, sample.gyro_z_dps);
+        atomic_store(&g_imu_snapshot_time_us, esp_timer_get_time());
+
+        log_divider++;
+        if (log_divider >= 100) {   // ~once per second at 100 Hz
+            log_divider = 0;
+            ESP_LOGI(TAG, "IMU accel(g)=[%.3f %.3f %.3f] gyro(dps)=[%.2f %.2f %.2f]",
+                     sample.accel_x_g, sample.accel_y_g, sample.accel_z_g,
+                     sample.gyro_x_dps, sample.gyro_y_dps, sample.gyro_z_dps);
+        }
+    }
 }
 
 // -------------------------------------------------------------------------
@@ -338,6 +406,51 @@ static void odom_timer_callback(rcl_timer_t *timer, int64_t last_call_time){
 }
 
 // -------------------------------------------------------------------------
+// /imu timer callback: runs inside uros_task executor at 100 Hz, matching
+// imu_task's sample rate. Reads the atomics imu_task writes and publishes.
+// -------------------------------------------------------------------------
+
+#define STANDARD_GRAVITY_M_S2   9.80665f
+#define DEG_TO_RAD              ((float) M_PI / 180.0f)
+
+static void imu_timer_callback(rcl_timer_t *timer, int64_t last_call_time){
+    (void) timer;
+    (void) last_call_time;
+
+    float accel_x_g  = atomic_load(&g_imu_accel_x_g);
+    float accel_y_g  = atomic_load(&g_imu_accel_y_g);
+    float accel_z_g  = atomic_load(&g_imu_accel_z_g);
+    float gyro_x_dps = atomic_load(&g_imu_gyro_x_dps);
+    float gyro_y_dps = atomic_load(&g_imu_gyro_y_dps);
+    float gyro_z_dps = atomic_load(&g_imu_gyro_z_dps);
+
+    fill_time_stamp(&msg_imu.header.stamp);
+
+    // No orientation estimate (no AHRS/sensor fusion yet): per REP 145,
+    // orientation_covariance[0] = -1 signals "orientation unknown" to
+    // consumers. Identity quaternion left in place defensively for any
+    // consumer that reads orientation without checking the covariance flag.
+    msg_imu.orientation.x = 0.0;
+    msg_imu.orientation.y = 0.0;
+    msg_imu.orientation.z = 0.0;
+    msg_imu.orientation.w = 1.0;
+
+    // SI units for the message: rad/s and m/s^2. imu_task's atomics are in
+    // deg/s and g (matches the raw sensor's natural units / this project's
+    // hardwareX_notes.md bring-up record) -- converted here at the ROS
+    // boundary, not inside imu.c.
+    msg_imu.angular_velocity.x = gyro_x_dps * DEG_TO_RAD;
+    msg_imu.angular_velocity.y = gyro_y_dps * DEG_TO_RAD;
+    msg_imu.angular_velocity.z = gyro_z_dps * DEG_TO_RAD;
+
+    msg_imu.linear_acceleration.x = accel_x_g * STANDARD_GRAVITY_M_S2;
+    msg_imu.linear_acceleration.y = accel_y_g * STANDARD_GRAVITY_M_S2;
+    msg_imu.linear_acceleration.z = accel_z_g * STANDARD_GRAVITY_M_S2;
+
+    RCSOFTCHECK(rcl_publish(&pub_imu, &msg_imu, NULL));
+}
+
+// -------------------------------------------------------------------------
 // control_task: 100 Hz PID loop. Structurally identical to Stage 2, plus
 // atomic setpoint reads at the top and atomic snapshot writes at the bottom.
 // -------------------------------------------------------------------------
@@ -443,6 +556,10 @@ static void uros_task(void *arg){
     msg_odom.child_frame_id.size      = strlen(frame_base);
     msg_odom.child_frame_id.capacity  = sizeof(frame_base);
 
+    msg_imu.header.frame_id.data      = frame_imu;
+    msg_imu.header.frame_id.size      = strlen(frame_imu);
+    msg_imu.header.frame_id.capacity  = sizeof(frame_imu);
+
     // Set conservative diagonal covariances for pose and twist. The 6x6
     // covariance is stored in row-major order: index = row*6 + col.
     // Placeholder values, real numbers will be measured for the paper.
@@ -461,7 +578,20 @@ static void uros_task(void *arg){
     msg_odom.twist.covariance[28] = 1e6;
     msg_odom.twist.covariance[35] = 0.01;            // sigma_wz^2
 
-    
+    // /imu covariances: 3x3 row-major (index = row*3 + col), unlike /odom's
+    // 6x6. No orientation estimate yet (no AHRS/sensor fusion) -- setting
+    // orientation_covariance[0] = -1 is the REP 145 signal for "orientation
+    // unknown, ignore this field". Angular velocity / linear acceleration
+    // diagonals are placeholders, not yet measured for the paper.
+    msg_imu.orientation_covariance[0] = -1.0;
+    msg_imu.angular_velocity_covariance[0] = 0.0001;    // sigma_wx^2 (rad/s)^2
+    msg_imu.angular_velocity_covariance[4] = 0.0001;    // sigma_wy^2
+    msg_imu.angular_velocity_covariance[8] = 0.0001;    // sigma_wz^2
+    msg_imu.linear_acceleration_covariance[0] = 0.0025; // sigma_ax^2 (m/s^2)^2
+    msg_imu.linear_acceleration_covariance[4] = 0.0025; // sigma_ay^2
+    msg_imu.linear_acceleration_covariance[8] = 0.0025; // sigma_az^2
+
+
     // micro-ROS initialization.
     rcl_allocator_t allocator = rcl_get_default_allocator();
     rclc_support_t  support;
@@ -480,7 +610,7 @@ static void uros_task(void *arg){
     RCCHECK(rclc_node_init_default(&node, "idefix_base", "", &support));
 
     // /cmd_vel subscription (best-effort, matches teleop_twist_keyboard and Nav2 defaults).
-    RCCHECK(rclc_subscription_init_default(
+    RCCHECK(rclc_subscription_init_best_effort(
         &sub_cmd_vel,
         &node,
         ROSIDL_GET_MSG_TYPE_SUPPORT(geometry_msgs, msg, Twist),
@@ -493,6 +623,15 @@ static void uros_task(void *arg){
         ROSIDL_GET_MSG_TYPE_SUPPORT(nav_msgs, msg, Odometry),
         "odom"));
 
+    // /imu/data_raw publisher: "data_raw" (not "data") per REP 145 naming
+    // convention, since this publishes accel+gyro without an orientation
+    // estimate -- "data" is reserved for post-AHRS/fusion output.
+    RCCHECK(rclc_publisher_init_default(
+        &pub_imu,
+        &node,
+        ROSIDL_GET_MSG_TYPE_SUPPORT(sensor_msgs, msg, Imu),
+        "imu/data_raw"));
+
     // 30 Hz odometry timer. The rclc_timer_init_default2 variant with
     // autostart=true starts the timer immediately after creation.
     rcl_timer_t timer;
@@ -503,11 +642,21 @@ static void uros_task(void *arg){
         odom_timer_callback,
         true));
 
-    // Executor with capacity for 2 handles: the subscription and the timer.
+    // 100 Hz IMU timer, matching imu_task's sample rate.
+    rcl_timer_t imu_timer;
+    RCCHECK(rclc_timer_init_default2(
+        &imu_timer,
+        &support,
+        RCL_MS_TO_NS(IMU_TIMER_PERIOD_MS),
+        imu_timer_callback,
+        true));
+
+    // Executor with capacity for 3 handles: the subscription and two timers.
     rclc_executor_t executor;
-    RCCHECK(rclc_executor_init(&executor, &support.context, 2, &allocator));
+    RCCHECK(rclc_executor_init(&executor, &support.context, 3, &allocator));
     RCCHECK(rclc_executor_add_subscription(&executor, &sub_cmd_vel, &msg_cmd_vel, &cmd_vel_callback, ON_NEW_DATA));
     RCCHECK(rclc_executor_add_timer(&executor, &timer));
+    RCCHECK(rclc_executor_add_timer(&executor, &imu_timer));
 
     // Try to sync our clock to the agent's clock once at startup. If the sync
     // fails (agent slow to respond), we fall through and use local time. It
@@ -535,6 +684,9 @@ void app_main(void){
     // Hardware bring-up in the same order as Stage 2.
     ESP_ERROR_CHECK(motor_init_all());               // TB6612 configured, STBY high, duty = 0
     ESP_ERROR_CHECK(encoder_init_all());             // PCNT units running, watch-points armed
+    ESP_ERROR_CHECK(imu_init());                     // I2C bus up, WHO_AM_I verified, gyro bias calibrated
+
+
 
     // PID initialization: same gains as validated Stage 2. Kept identical so
     // Stage 2 validation carries over unchanged.
@@ -580,5 +732,19 @@ void app_main(void){
         NULL,                                        // no handle needed
         0);                                          // core 0
 
-    ESP_LOGI(TAG, "tasks launched: control_task on core 1 prio 5, uros_task on core 0 prio 3");
+    // Launch imu_task (100 Hz IMU sampling) on core 0 alongside uros_task.
+    // Not on core 1: blocking I2C calls have no business near the
+    // hard-real-time PID loop. Priority 4, between control_task and
+    // uros_task -- sampling timing matters somewhat, but not so much
+    // that it should delay the micro-ROS executor's spin.
+    xTaskCreatePinnedToCore(
+        imu_task,                                    // task function
+        "imu",                                       // debug name
+        4096,                                        // stack: same order as control_task, simple periodic loop
+        NULL,                                        // no argument
+        4,                                           // priority: between control_task and uros_task
+        NULL,                                        // no handle needed
+        0);                                          // core 0
+
+    ESP_LOGI(TAG, "tasks launched: control_task on core 1 prio 5, uros_task on core 0 prio 3, imu_task on core 0 prio 4");
 }
