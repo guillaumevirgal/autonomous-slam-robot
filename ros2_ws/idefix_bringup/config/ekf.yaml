@@ -1,0 +1,57 @@
+# ekf.yaml
+# robot_localization EKF fusing wheel odometry and IMU angular rate into a
+# single odom -> base_link estimate. Becomes the sole publisher of that TF
+# edge; odom_tf_broadcaster must NOT be run at the same time (see
+# ekf.launch.py). Covariance tuning intentionally deferred, see the commit
+# that added this file.
+
+ekf_filter_node:
+  ros__parameters:
+    frequency: 50.0            # higher gains nothing: fastest input is 100 Hz IMU, slowest is 30 Hz odom
+    two_d_mode: true           # planar differential drive; keeps z/roll/pitch locked to zero rather
+                                # than letting the filter wander in unobservable dimensions
+    sensor_timeout: 0.2
+    use_sim_time: false
+
+    publish_tf: true
+    world_frame: odom
+    odom_frame: odom
+    base_link_frame: base_link
+    map_frame: map
+
+    # /odom: fuse body-frame velocities only (vx, vyaw), not pose. The wheel
+    # odometry's own integrated x/y/yaw already comes from these same
+    # velocities, so fusing both would double-count the same information.
+    odom0: /odom
+    odom0_config: [false, false, false,
+                   false, false, false,
+                   true,  false, false,
+                   false, false, true,
+                   false, false, false]
+    odom0_differential: false
+    odom0_relative: false
+    odom0_queue_size: 10
+
+    # /imu/data_raw: fuse angular velocity (vyaw) only. Do not fuse linear
+    # acceleration from the MPU6500 clone at this stage, it is noisy and
+    # uncalibrated (no per-axis scale/bias calibration performed yet), and
+    # integrating it would hurt more than help. No orientation estimate
+    # exists either (orientation_covariance[0] = -1 on the message), so
+    # orientation fields are correctly left unfused.
+    imu0: /imu/data_raw
+    imu0_config: [false, false, false,
+                  false, false, false,
+                  false, false, false,
+                  false, false, true,
+                  false, false, false]
+    imu0_differential: false
+    imu0_relative: false
+    imu0_queue_size: 10
+    imu0_remove_gravitational_acceleration: true   # safe default even though accel isn't fused,
+                                                    # in case that changes later
+
+    use_control: false
+
+    # process_noise_covariance and initial_estimate_covariance intentionally
+    # left at robot_localization's defaults. Get the fused estimate stable
+    # first, tune later against measured teleop runs.
