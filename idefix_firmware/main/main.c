@@ -67,6 +67,9 @@
 // IMU
 #include "imu.h"
 
+// Battery voltage sense + buzzer
+#include "battery.h"
+
 
 static const char *TAG = "main";
 
@@ -86,6 +89,11 @@ static const char *TAG = "main";
 // /imu publish period: matches imu_task's 100 Hz sample rate 1:1, so every
 // sample gets published with no decimation/loss.
 #define IMU_TIMER_PERIOD_MS    10
+
+// Battery voltage poll period: 2 Hz. Pack voltage is a slow-moving
+// quantity (seconds to change meaningfully under normal discharge), no
+// need to sample it anywhere near motor/IMU rates.
+#define BATTERY_TASK_PERIOD_MS 500
 
 // /cmd_vel watchdog: if no message received within this window, force zero
 // setpoints. 500 ms is 10 missed Nav2 controller frames at the default 20 Hz
@@ -289,6 +297,57 @@ static void imu_task(void *arg){
             ESP_LOGI(TAG, "IMU accel(g)=[%.3f %.3f %.3f] gyro(dps)=[%.2f %.2f %.2f]",
                      sample.accel_x_g, sample.accel_y_g, sample.accel_z_g,
                      sample.gyro_x_dps, sample.gyro_y_dps, sample.gyro_z_dps);
+        }
+    }
+}
+
+// -------------------------------------------------------------------------
+// battery_task: 2 Hz battery voltage poll, drives the low-voltage buzzer.
+// Independent of every other task, touches neither PID/motor state nor
+// micro-ROS. Hysteresis (BATTERY_LOW_VOLTAGE_THRESHOLD_V to turn on,
+// BATTERY_LOW_VOLTAGE_CLEAR_V to turn back off) lives here rather than in
+// battery.c, since it is alarm policy, not a hardware driver concern.
+// -------------------------------------------------------------------------
+
+static void battery_task(void *arg){
+    (void) arg;
+
+    TickType_t last_wake = xTaskGetTickCount();
+    const TickType_t period = pdMS_TO_TICKS(BATTERY_TASK_PERIOD_MS);
+    bool buzzer_on = false;
+    int log_divider = 0;
+
+    while (1) {
+        vTaskDelayUntil(&last_wake, period);
+
+        float voltage_v = 0.0f;
+        if (!battery_read_voltage_v(&voltage_v)) {
+            // Every sample in this read failed at the ADC/driver level
+            // (see battery_read_voltage_v()'s doc comment) -- skip the
+            // hysteresis update rather than treat a transient glitch as a
+            // real event. A genuinely disconnected/near-empty battery
+            // still returns true with a low voltage_v, and does reach the
+            // hysteresis check below as intended.
+            ESP_LOGW(TAG, "battery: voltage read failed, skipping this sample");
+            continue;
+        }
+
+        if (!buzzer_on && voltage_v <= BATTERY_LOW_VOLTAGE_THRESHOLD_V) {
+            buzzer_on = true;
+            battery_set_buzzer(true);
+            ESP_LOGW(TAG, "battery: %.2f V at or below %.2f V threshold, buzzer ON",
+                     voltage_v, BATTERY_LOW_VOLTAGE_THRESHOLD_V);
+        } else if (buzzer_on && voltage_v >= BATTERY_LOW_VOLTAGE_CLEAR_V) {
+            buzzer_on = false;
+            battery_set_buzzer(false);
+            ESP_LOGI(TAG, "battery: %.2f V at or above %.2f V clear point, buzzer OFF",
+                     voltage_v, BATTERY_LOW_VOLTAGE_CLEAR_V);
+        }
+
+        log_divider++;
+        if (log_divider >= 20) {   // ~once per 10 s at 2 Hz
+            log_divider = 0;
+            ESP_LOGI(TAG, "battery: %.2f V, buzzer %s", voltage_v, buzzer_on ? "ON" : "off");
         }
     }
 }
@@ -692,6 +751,7 @@ void app_main(void){
     ESP_ERROR_CHECK(motor_init_all());               // TB6612 configured, STBY high, duty = 0
     ESP_ERROR_CHECK(encoder_init_all());             // PCNT units running, watch-points armed
     ESP_ERROR_CHECK(imu_init());                     // I2C bus up, WHO_AM_I verified, gyro bias calibrated
+    ESP_ERROR_CHECK(battery_init());                 // ADC1 ch for battery sense up, buzzer GPIO configured off
 
 
 
@@ -753,5 +813,18 @@ void app_main(void){
         NULL,                                        // no handle needed
         0);                                          // core 0
 
-    ESP_LOGI(TAG, "tasks launched: control_task on core 1 prio 5, uros_task on core 0 prio 3, imu_task on core 0 prio 4");
+    // Launch battery_task (2 Hz voltage poll + buzzer) on core 0. Lowest
+    // priority of the four tasks: it is pure housekeeping, nothing else
+    // depends on its timing.
+    xTaskCreatePinnedToCore(
+        battery_task,                                // task function
+        "battery",                                   // debug name
+        3072,                                        // stack: simple periodic loop, one ADC read, one GPIO write
+        NULL,                                        // no argument
+        2,                                           // priority: lowest of the four tasks
+        NULL,                                        // no handle needed
+        0);                                          // core 0
+
+    ESP_LOGI(TAG, "tasks launched: control_task on core 1 prio 5, uros_task on core 0 prio 3, "
+                  "imu_task on core 0 prio 4, battery_task on core 0 prio 2");
 }

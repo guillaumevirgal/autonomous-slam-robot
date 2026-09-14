@@ -27,9 +27,18 @@ Every GPIO number in the firmware lives here. No other file hardcodes a pin.
 #define ENCODER_A_CHA_GPIO  4   // Encoder A channel A (quadrature) C1U1
 #define ENCODER_A_CHB_GPIO  5   // Encoder A channel B (quadrature) C2U1
 
-// Encoder B (paired with Motor B) 
+// Encoder B (paired with Motor B)
 #define ENCODER_B_CHA_GPIO 13   // Encoder B channel A (quadrature) C1U2
 #define ENCODER_B_CHB_GPIO 14   // Encoder B channel B (quadrature) C2U2
+
+// Battery voltage sense: resistor divider from Vbat (top 100 kOhm, bottom
+// 22 kOhm) into an ADC1 pin. Must stay on ADC1 (GPIO1-10): ADC2 is unusable
+// while Wi-Fi is active on the ESP32-S3.
+#define BATTERY_ADC_GPIO    6    // ADC1 channel 5 (GPIO1-10 map to ADC1_CH0-9, GPIO6 = CH5)
+
+// Active buzzer, driven directly by a GPIO (no PWM/tone needed, the buzzer
+// has its own oscillator).
+#define BUZZER_GPIO         42
 
 
 
@@ -37,4 +46,8 @@ Every GPIO number in the firmware lives here. No other file hardcodes a pin.
 #define UROS_UART_NUM       UART_NUM_0    // hard-wired to the onboard USB-UART bridge chip
 #define UROS_UART_TX_GPIO   43            // U0TXD, fixed by the DevKitC-1 board layout
 #define UROS_UART_RX_GPIO   44            // U0RXD, fixed by the DevKitC-1 board layout
-#define UROS_UART_BAUDRATE  460800        // start rate; move to 921600 once the pipeline is stable
+#define UROS_UART_BAUDRATE  921600        // raised from 460800: /odom (30 Hz, ~700 B/msg with two
+                                          // 6x6 covariances) + /imu (100 Hz, ~316 B/msg) exceeds
+                                          // 460800's ~46 KB/s raw capacity (~53 KB/s combined at
+                                          // full rate); 921600 gives ~92 KB/s. Agent must launch
+                                          // with matching -b 921600.

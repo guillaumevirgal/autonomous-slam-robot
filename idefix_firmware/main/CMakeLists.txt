@@ -5,6 +5,7 @@ idf_component_register(
         "encoder.c"
         "pid.c"
         "imu.c"
+        "battery.c"
         "esp32_serial_transport.c"
     INCLUDE_DIRS "."
     REQUIRES
@@ -12,6 +13,8 @@ idf_component_register(
         driver
         # esp_timer: high-resolution microsecond clock for velocity dt
         esp_timer
+        # esp_adc: adc_oneshot.h / adc_cali.h for battery voltage sense
+        esp_adc
         # micro_ros espidf
         micro_ros_espidf_component
         # freertos: task creation and vTaskDelayUntil
