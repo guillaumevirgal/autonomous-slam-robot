@@ -626,7 +626,14 @@ static void uros_task(void *arg){
     // /imu/data_raw publisher: "data_raw" (not "data") per REP 145 naming
     // convention, since this publishes accel+gyro without an orientation
     // estimate -- "data" is reserved for post-AHRS/fusion output.
-    RCCHECK(rclc_publisher_init_default(
+    //
+    // BEST_EFFORT, not the RELIABLE default: sensor streams conventionally
+    // use best-effort QoS (matches Nav2/robot_localization expectations for
+    // /imu topics) specifically to avoid per-message ACK/retry overhead.
+    // Measured before this change: /imu/data_raw averaged ~78-84 Hz against
+    // a 100 Hz target, sharing the RELIABLE /odom publisher's transport
+    // session; this tests whether that ACK/retry overhead is why.
+    RCCHECK(rclc_publisher_init_best_effort(
         &pub_imu,
         &node,
         ROSIDL_GET_MSG_TYPE_SUPPORT(sensor_msgs, msg, Imu),
