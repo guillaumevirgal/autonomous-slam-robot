@@ -22,11 +22,16 @@
 // Shared state (stdatomic.h):
 //   uros_task -> control_task: g_setpoint_a, g_setpoint_b, g_last_cmd_vel_us
 //   control_task -> uros_task: g_snapshot_counts_a, g_snapshot_counts_b, g_snapshot_time_us
-//   No mutex. No critical section. Float and int64 loads/stores are word-atomic
-//   on ESP32-S3 for naturally aligned addresses, and _Atomic enforces that.
+//   Float and int64 loads/stores are word-atomic on ESP32-S3 for naturally
+//   aligned addresses, and _Atomic enforces that -- true for each field on
+//   its own. The encoder snapshot's three fields are also read/written as
+//   one group under a short portMUX critical section (g_snapshot_mux),
+//   since three independent atomics let a reader see counts from one
+//   control_task iteration paired with the timestamp from another (a torn
+//   read): see odom_timer_callback.
 //
 // Transport:
-//   micro-ROS over UART0 at 460800 baud, via the DevKitC-1 onboard USB-UART bridge
+//   micro-ROS over UART0 at 921600 baud, via the DevKitC-1 onboard USB-UART bridge
 //   on the "UART" USB-C port. Console output (ESP_LOG, printf) is routed to the
 //   native USB-Serial/JTAG on the "USB" USB-C port. See docs/hardware_bringup.md
 //   for the two-cable topology and menuconfig requirements.
@@ -132,10 +137,14 @@ static _Atomic float   g_setpoint_a       = 0.0f;    // rad/s, left wheel (motor
 static _Atomic float   g_setpoint_b       = 0.0f;    // rad/s, right wheel (motor B)
 static _Atomic int64_t g_last_cmd_vel_us  = 0;       // esp_timer_get_time() of last /cmd_vel; 0 = never
 
-// Written by control_task, read by uros_task.
+// Written by control_task, read by uros_task. Always accessed as a group
+// under g_snapshot_mux (see the file header comment and odom_timer_callback):
+// per-field atomicity alone let a reader pair counts from one control_task
+// iteration with the timestamp from another.
 static _Atomic int64_t g_snapshot_counts_a = 0;      // raw accumulated encoder counts, left
 static _Atomic int64_t g_snapshot_counts_b = 0;      // raw accumulated encoder counts, right
 static _Atomic int64_t g_snapshot_time_us  = 0;      // esp_timer_get_time() at snapshot
+static portMUX_TYPE g_snapshot_mux = portMUX_INITIALIZER_UNLOCKED;
 
 // Written by imu_task, not yet read anywhere (no micro-ROS publish yet).
 // Same snapshot-atomics pattern as the encoder fields above: individual
@@ -390,12 +399,18 @@ static void odom_timer_callback(rcl_timer_t *timer, int64_t last_call_time){
     (void) timer;                                    // unused, we only have one timer
     (void) last_call_time;                           // we use our own timing
 
-    // Read the snapshot atomically. Three loads are not one transaction, so
-    // in principle we could see counts from cycle N and time from cycle N+1.
-    // At worst, ~10 ms of temporal skew. Invisible to Nav2.
+    // Read the snapshot as one group (g_snapshot_mux): pairing counts from
+    // one control_task iteration with the timestamp from another produces a
+    // dt that doesn't match the true interval between those counts, and if
+    // the mismatch pushes dt very small, dtheta/dt spikes to a physically
+    // impossible instantaneous angular velocity. Previously reasoned to be
+    // "at worst ~10 ms of temporal skew, invisible to Nav2" -- measured
+    // spikes of ~200-290 rad/s in practice. See docs/hardware_bringup.md.
+    portENTER_CRITICAL(&g_snapshot_mux);
     int64_t counts_a = atomic_load(&g_snapshot_counts_a);
     int64_t counts_b = atomic_load(&g_snapshot_counts_b);
     int64_t time_us  = atomic_load(&g_snapshot_time_us);
+    portEXIT_CRITICAL(&g_snapshot_mux);
 
     if (!odom_primed) {
         // First callback: initialize the "last" values and skip integration.
@@ -589,10 +604,13 @@ static void control_task(void *arg){
         motor_set_duty(MOTOR_A, duty_a);
         motor_set_duty(MOTOR_B, duty_b);
 
-        // Publish encoder snapshot for the uros_task to integrate.
+        // Publish encoder snapshot for the uros_task to integrate, as one
+        // group under g_snapshot_mux -- see odom_timer_callback.
+        portENTER_CRITICAL(&g_snapshot_mux);
         atomic_store(&g_snapshot_counts_a, counts_a);
         atomic_store(&g_snapshot_counts_b, counts_b);
         atomic_store(&g_snapshot_time_us, now_us);
+        portEXIT_CRITICAL(&g_snapshot_mux);
     }
 }
 
