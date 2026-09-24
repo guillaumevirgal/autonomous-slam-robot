@@ -99,3 +99,79 @@ theories too). Not yet fixed -- needs the three atomic loads to become one
 consistent snapshot (e.g. pack into a struct behind a single atomic, or a
 seqlock) before trusting `/odom` angular velocity for anything beyond this
 kind of diagnostic.
+
+## 2026-09-24: Online SLAM + Nav2 on hardware (navigate while mapping)
+
+### Context
+
+Goal: run Nav2 against slam_toolbox's live `/map` (mapping mode) instead of
+a saved map + localization, so the robot can navigate in rooms it has never
+mapped. New launch file `idefix_bringup/launch/slam_nav.launch.py`: includes
+`slam_mapping.launch.py` unchanged and adds the Nav2 servers without
+`map_server` (global costmap `static_layer` subscribes to the live `/map`).
+
+### Nav2 was not installed on the Pi
+
+Nav2 had only ever run in Gazebo on WSL2. Installed on the Pi with
+`sudo apt install ros-jazzy-navigation2` (1.3.13-1noble.20260907.041002).
+
+Side issue: on the phone-hotspot network (`192.168.250.0/24`) the Pi had no
+usable internet (TCP handshakes completed but no data came back, DNS over
+UDP and TCP both timed out). Workaround used to confirm the package
+servers were reachable: an SSH reverse SOCKS tunnel through the dev machine
+(`ssh -R 1080 idefix`, then `apt -o
+Acquire::http::Proxy=socks5h://localhost:1080 ...`). The install itself
+completed after the Pi was rebooted and the network recovered.
+
+### Bringup
+
+```
+# tmux window 1
+ros2 run micro_ros_agent micro_ros_agent serial --dev /dev/idefix-esp32 -b 921600
+# tmux window 2
+ros2 launch idefix_bringup slam_nav.launch.py
+```
+
+Verified: `/odom` 30 Hz, `/scan` 10 Hz, `map -> odom -> base_footprint ->
+base_link` resolves, lifecycle manager "Managed nodes are active", global
+costmap log `StaticLayer: Resizing costmap to 97 X 62` (sized from the live
+`/map`). Pi 5 load ~3.3 (4 cores), ~760 MB RAM with the full stack.
+
+First goal (~0.5-1 m, sent from RViz2 over `ssh -X`) succeeded in 9 s, but
+the robot stopped briefly several times on the way (see open issue below).
+
+### Bug: every Nav2 node ran on sim time
+
+A second goal failed (RPP "collision ahead", then NavFn could not plan), and
+the recovery spin failed with `behavior_server: Costmap is not available`.
+The BT then hung in the wait recovery and ignored every later goal.
+
+Diagnosis: `ros2 param get <node> use_sim_time` returned `True` on all Nav2
+nodes, including the costmap sub-nodes, even though the launch file set
+`SetParameter(use_sim_time=false)`. `nav2_params.yaml` sets
+`use_sim_time: True` per node (Gazebo default), and those node-scoped
+values override a launch-level `SetParameter`. With no `/clock`, ROS time
+stayed at 0, so the costmaps' time-gated publish never fired
+(`ros2 topic hz /global_costmap/costmap` -> no messages, while
+`/local_costmap/published_footprint` ran at 5 Hz). The first goal worked
+only because the controller reads its costmap in-process.
+
+Fix: `slam_nav.launch.py` passes the params through
+`nav2_common.launch.RewrittenYaml(param_rewrites={'use_sim_time': ...})`,
+the same way `nav2_bringup` does. Verified after: `use_sim_time` False on
+all Nav2 nodes, `/global_costmap/costmap` and `/local_costmap/costmap_raw`
+publishing. `nav2.launch.py` (saved-map path) has the same latent bug when
+launched with `use_sim_time:=false`.
+
+### Open: stalls during goal following
+
+Stalls during the first goal are not explained by the Nav2 log (no
+recovery, no collision stop, no progress-checker failure). Candidates: the
+whole short path fell inside RPP's approach slow-down zone
+(`approach_velocity_scaling_dist: 0.6`, down to 0.05 m/s, possibly below
+motor stiction with the 0.24 duty clamp), rotate-to-heading on each 1 Hz
+replan, or cost-regulated scaling near inflated obstacles. Recording
+`/cmd_vel_nav`, `/cmd_vel`, `/odom`, `/plan`, `/tf` to `~/bags/goal_run_*`
+for the next goal to separate "Nav2 commands low speed" from "motors don't
+follow the command". Note: the first run happened with the sim-time bug
+active, so it may not be representative.
