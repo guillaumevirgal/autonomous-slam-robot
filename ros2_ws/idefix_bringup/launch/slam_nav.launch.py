@@ -37,8 +37,9 @@ from launch.actions import (
 )
 from launch.launch_description_sources import PythonLaunchDescriptionSource
 from launch.substitutions import LaunchConfiguration, PathJoinSubstitution
-from launch_ros.actions import Node, SetParameter
+from launch_ros.actions import Node
 from launch_ros.substitutions import FindPackageShare
+from nav2_common.launch import RewrittenYaml
 
 
 def generate_launch_description():
@@ -62,6 +63,17 @@ def generate_launch_description():
     use_sim_time = LaunchConfiguration('use_sim_time')
     nav2_delay = LaunchConfiguration('nav2_delay')
 
+    # nav2_params.yaml sets use_sim_time: True per node (sim default), and
+    # those node-scoped values beat a launch-level SetParameter, including
+    # inside the costmap sub-nodes. With no /clock, sim time stays at 0 and
+    # the costmaps never publish (behavior_server then fails with "Costmap
+    # is not available"). Rewrite every use_sim_time key in the file instead.
+    configured_params = RewrittenYaml(
+        source_file=nav2_params_file,
+        param_rewrites={'use_sim_time': use_sim_time},
+        convert_types=True,
+    )
+
     slam_mapping_launch = IncludeLaunchDescription(
         PythonLaunchDescriptionSource(
             PathJoinSubstitution([bringup_share, 'launch', 'slam_mapping.launch.py'])
@@ -81,44 +93,42 @@ def generate_launch_description():
     ]
 
     nav2_nodes = GroupAction([
-        SetParameter(name='use_sim_time', value=use_sim_time),
-
         Node(
             package='nav2_planner', executable='planner_server',
             name='planner_server', output='screen',
-            parameters=[nav2_params_file],
+            parameters=[configured_params],
         ),
         Node(
             package='nav2_controller', executable='controller_server',
             name='controller_server', output='screen',
-            parameters=[nav2_params_file],
+            parameters=[configured_params],
             remappings=[('cmd_vel', 'cmd_vel_nav')],
         ),
         Node(
             package='nav2_smoother', executable='smoother_server',
             name='smoother_server', output='screen',
-            parameters=[nav2_params_file],
+            parameters=[configured_params],
         ),
         Node(
             package='nav2_behaviors', executable='behavior_server',
             name='behavior_server', output='screen',
-            parameters=[nav2_params_file],
+            parameters=[configured_params],
             remappings=[('cmd_vel', 'cmd_vel_nav')],
         ),
         Node(
             package='nav2_bt_navigator', executable='bt_navigator',
             name='bt_navigator', output='screen',
-            parameters=[nav2_params_file],
+            parameters=[configured_params],
         ),
         Node(
             package='nav2_waypoint_follower', executable='waypoint_follower',
             name='waypoint_follower', output='screen',
-            parameters=[nav2_params_file],
+            parameters=[configured_params],
         ),
         Node(
             package='nav2_velocity_smoother', executable='velocity_smoother',
             name='velocity_smoother', output='screen',
-            parameters=[nav2_params_file],
+            parameters=[configured_params],
             remappings=[
                 ('cmd_vel', 'cmd_vel_nav'),       # input from Nav2
                 ('cmd_vel_smoothed', 'cmd_vel'),  # output to the ESP32 via micro-ROS
