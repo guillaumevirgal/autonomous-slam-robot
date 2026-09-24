@@ -2,9 +2,18 @@
  * encoder.c
  *
  * PCNT-based quadrature decoder for two N20 encoders. Targets the
- * ESP-IDF v5.3 PCNT new driver API (driver/pulse_cnt.h). Uses the
- * standard trick for extending PCNT's 16-bit hardware counter to a
- * software-tracked 64-bit accumulator via watch-point interrupts.
+ * ESP-IDF v5.3 PCNT new driver API (driver/pulse_cnt.h). PCNT's 16-bit
+ * hardware counter is extended by the driver itself (flags.accum_count):
+ * on each watch-point hit at +/-PCNT_*_LIMIT its ISR adds the limit to an
+ * internal accum_value, and pcnt_unit_get_count() returns hw + accum_value,
+ * compensating a still-pending overflow event.
+ *
+ * Do NOT also accumulate watch_point_value in an on_reach callback: this
+ * file used to, which counted every overflow twice. Each time a wheel's net
+ * count crossed +/-30000 the total jumped by a further 30000 counts
+ * (~0.99 m on that wheel), showing up as single /odom samples of ~200-290
+ * rad/s and ~132 deg pose jumps (30000 counts -> 8.585 rad -> 131.9 deg
+ * after wrapping).
  */
 
 
@@ -33,19 +42,14 @@ typedef struct {
     pcnt_unit_handle_t  unit;
     pcnt_channel_handle_t ch_a; /* watches channel A edges */
     pcnt_channel_handle_t ch_b; /* watches channel B edges */
-    volatile int64_t    accumulator;      /* extended counter */
     volatile int64_t    last_read_counts; /* for velocity dt */
     volatile int64_t    last_read_time_us;
     bool                invert_direction;
-    // Guards `accumulator` against pcnt_watch_cb (the watch-point ISR).
-    // portDISABLE_INTERRUPTS()/portENABLE_INTERRUPTS() only mask the current
-    // core: the ISR is registered from encoder_init_all() -> app_main() on
-    // core 0, but encoder_read_counts() is called from control_task, which
-    // is pinned to core 1. A single-core interrupt mask does nothing to
-    // block the other core's ISR, so the accumulator+hw_count read could
-    // tear right as a watch point fires (a +-30000 count jump), producing
-    // an occasional large, roughly-constant-magnitude glitch in the
-    // computed velocity. A portMUX spinlock is the cross-core primitive.
+    // Serializes encoder_read_counts() against encoder_reset(). The driver's
+    // accum_value vs. its overflow ISR (registered on core 0, while
+    // control_task reads from core 1) is guarded by the driver's own
+    // spinlock inside pcnt_unit_get_count(), so no cross-core ISR guard is
+    // needed here any more.
     portMUX_TYPE         mux;
 } encoder_ctx_t;
 
@@ -54,20 +58,6 @@ static encoder_ctx_t s_encoders[ENCODER_COUNT]; // One struct per encoder, kept 
 
 
 
-/* Watch-point ISR: called from PCNT hardware when the counter reaches one of our configured limits. 
-   Watch-point event, so we don't need to clear it manually. */
-static bool IRAM_ATTR pcnt_watch_cb(pcnt_unit_handle_t unit, const pcnt_watch_event_data_t *edata, void *user_ctx){
-
-    encoder_ctx_t *enc = (encoder_ctx_t *)user_ctx; // Declares enc as an encoder_ctx_t
-
-    // Add the watch point value (+30000 or -30000) to the accumulator.
-    // ISR context: must use the _ISR critical section variant, not the
-    // plain task-context one used in encoder_read_counts()/encoder_reset().
-    portENTER_CRITICAL_ISR(&enc->mux);
-    enc->accumulator += edata->watch_point_value; // watch_point_value is defined by ESP-IDF
-    portEXIT_CRITICAL_ISR(&enc->mux);
-    return false; /* no higher priority task woken */
-}
 
 
 
@@ -84,7 +74,7 @@ static esp_err_t configure_pcnt(encoder_ctx_t *enc, gpio_num_t cha, gpio_num_t c
     unit_cfg.high_limit = PCNT_HIGH_LIMIT;         // upper watch point
     unit_cfg.low_limit  = PCNT_LOW_LIMIT;          // lower watch point
     unit_cfg.intr_priority = 0;                    // 0 = let IDF pick priority
-    unit_cfg.flags.accum_count = true;             // auto-reset HW counter at watch point
+    unit_cfg.flags.accum_count = true;             // driver extends the 16-bit counter past the limits; see file header
  
     // Ask the driver to create a new PCNT unit with that config.
     esp_err_t err = pcnt_new_unit(&unit_cfg, &enc->unit);
@@ -140,19 +130,14 @@ static esp_err_t configure_pcnt(encoder_ctx_t *enc, gpio_num_t cha, gpio_num_t c
  
 
     // Watch points
-    // Ask PCNT to fire an event when the counter reaches these values
+    // accum_count relies on these: the HW counter resets to 0 at a limit and
+    // the driver's ISR adds that limit to its accum_value.
     err = pcnt_unit_add_watch_point(enc->unit, PCNT_HIGH_LIMIT);
     ESP_ERROR_CHECK(err);
     err = pcnt_unit_add_watch_point(enc->unit, PCNT_LOW_LIMIT);
     ESP_ERROR_CHECK(err);
  
 
-    // ISR callback
-    pcnt_event_callbacks_t cbs = {0};
-    cbs.on_reach = pcnt_watch_cb; // `cbs.on_reach` is called when a watch point fires
-    err = pcnt_unit_register_event_callbacks(enc->unit, &cbs, enc); 
-    ESP_ERROR_CHECK(err);
- 
 
     // Start the unit
     err = pcnt_unit_enable(enc->unit);       // move unit from init -> enabled
@@ -163,7 +148,6 @@ static esp_err_t configure_pcnt(encoder_ctx_t *enc, gpio_num_t cha, gpio_num_t c
     ESP_ERROR_CHECK(err);
  
     // Initialize the software fields
-    enc->accumulator       = 0;                        // start at zero
     enc->last_read_counts  = 0;                        // no previous read yet
     enc->last_read_time_us = esp_timer_get_time();     // record now as "last time"
     enc->invert_direction  = invert;                   // sign flip
@@ -205,17 +189,16 @@ int64_t encoder_read_counts(encoder_id_t enc_id)
     // Grab a pointer to the right context struct.
     encoder_ctx_t *enc = &s_encoders[enc_id];
  
-    // Local variable to hold the current hardware count.
-    int hw_count = 0;
+    // Already overflow-extended by the driver (accum_count). int, so it wraps
+    // after 2^31 counts (~511k output revolutions, ~70 km of wheel travel).
+    int count = 0;
 
 
-    portENTER_CRITICAL(&enc->mux); // cross-core lock vs. pcnt_watch_cb (core 0)
+    portENTER_CRITICAL(&enc->mux); // vs. encoder_reset()
 
-    // Ask the PCNT driver for the current hardware counter value.
-    pcnt_unit_get_count(enc->unit, &hw_count);
+    pcnt_unit_get_count(enc->unit, &count);
 
-    // Combine the 64-bit accumulator with the current 16-bit hardware value.
-    int64_t total = enc->accumulator + (int64_t) hw_count;
+    int64_t total = (int64_t) count;
 
 
     portEXIT_CRITICAL(&enc->mux);
@@ -285,11 +268,9 @@ void encoder_reset(encoder_id_t enc_id)
     // Same critical section pattern as encoder_read_counts
     portENTER_CRITICAL(&enc->mux);
 
-    // Zero the hardware counter.
+    // Zeroes both the hardware counter and the driver's accum_value.
     pcnt_unit_clear_count(enc->unit);
 
-    // Zero all software state.
-    enc->accumulator       = 0;
     enc->last_read_counts  = 0;
     enc->last_read_time_us = esp_timer_get_time();
 

@@ -11,10 +11,9 @@
  * with zero CPU cost.
  *
  * PCNT gotcha (handled internally): the S3's PCNT counter is signed
- * 16-bit and wraps. We register watch points at +/- 30000 and
- * accumulate wraps into a signed 64-bit software counter in the ISR.
- * The public API returns the 64-bit accumulated count, so wraparound
- * is invisible to callers.
+ * 16-bit and wraps. We register watch points at +/- 30000 and let the
+ * PCNT driver accumulate the wraps (flags.accum_count). The public API
+ * returns the extended count, so wraparound is invisible to callers.
  *
  * Quadrature decoding: 4x edge counting (both channels, both edges).
  * This is the standard "full quadrature" mode and gives us 4 counts
@@ -65,7 +64,8 @@ float encoder_read_velocity_rad_s(encoder_id_t enc);
 
 /*
  * Zero the accumulated count. Useful for odometry resets. Does NOT
- * stop the hardware counter, just resets the software accumulator
- * and the last-read timestamp used by velocity computation.
+ * stop the hardware counter, just clears it (and the driver's overflow
+ * accumulator) and resets the last-read timestamp used by velocity
+ * computation.
  */
 void encoder_reset(encoder_id_t enc);
