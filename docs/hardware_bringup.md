@@ -163,6 +163,61 @@ all Nav2 nodes, `/global_costmap/costmap` and `/local_costmap/costmap_raw`
 publishing. `nav2.launch.py` (saved-map path) has the same latent bug when
 launched with `use_sim_time:=false`.
 
+### Root cause of the ~200-290 rad/s /odom spike: PCNT overflow counted twice
+
+Found from a 12-minute `slam_nav` bag (`~/bags/goal_run_190907`): two
+`/odom` samples with `vx=16.53 m/s, wz=286.4 rad/s` and `vx=12.34,
+wz=-215.5`, each followed by a permanent 0.50 m / 132 deg odom pose jump.
+slam_toolbox then corrected `map -> odom` in 21 deg steps (the edge of its
+angular search window) and never recovered, ending 42 deg off, giving ghost
+walls and planner failures.
+
+Both spikes match exactly 30000 encoder counts on a single wheel within one
+odom period: vx/wz = L/2 (one wheel only; 16.53/286.4 = 0.0577 m, L = 0.115
+m); 30000 / 4200 counts/rev x 2 pi x 0.022 m = 0.987 m of wheel travel;
+0.987 / 0.115 = 8.585 rad = 491.9 deg -> 131.9 deg wrapped (measured 132.3
+and 133.8); body displacement 0.494 m (measured 0.496, 0.494); dt =
+8.585 / 286.4 = 30 ms (one odom period).
+
+Cause: `encoder.c` set `unit_cfg.flags.accum_count = true`, so the ESP-IDF
+5.3 PCNT driver already adds +/-30000 to its internal `accum_value` on each
+watch-point hit and `pcnt_unit_get_count()` returns `hw + accum_value`
+(`components/esp_driver_pcnt/src/pulse_cnt.c`). The firmware's own
+`on_reach` callback also added `watch_point_value` to a software
+accumulator, and `encoder_read_counts()` returned `accumulator +
+get_count()`, so every overflow was counted twice. This is deterministic,
+not a race: it fires each time a wheel's net count crosses +/-30000
+(~0.99 m of net wheel travel). A 360 deg in-place rotation moves each wheel
+~11000 counts, which is why it showed up in roughly 1 of 3 rotation runs.
+Supersedes the torn-read hypothesis in "Finding 2" above (the portMUX fixes
+from 849f7e7 remain correct, but did not address this).
+
+Fix: removed the `on_reach` callback and the software accumulator; kept
+`accum_count` and the watch points (the driver needs them), and
+`encoder_read_counts()` now returns the driver's extended count directly.
+Flashed from the Pi over the UART port (app image only, esptool 4.7.0,
+`--no-stub`), then reset via the native USB-JTAG port so the micro-ROS
+handshake hit a listening agent:
+
+```
+esptool --chip esp32s3 --port /dev/idefix-esp32 -b 460800 --no-stub \
+  write_flash --flash_mode dio --flash_freq 80m --flash_size 8MB \
+  0x10000 idefix_firmware.bin
+esptool --chip esp32s3 --port /dev/serial/by-id/usb-Espressif_USB_JTAG_serial_debug_unit_*-if00 \
+  --no-stub --after hard_reset chip_id
+```
+
+Verified: two back-to-back 4-turn in-place spins at 0.8 rad/s, the second
+crossing the next overflow (~5.5 turns since boot): odom yaw 1428.7 deg for
+1440 deg commanded (99.2%), max |wz| 0.887 rad/s, largest single-sample yaw
+step 2.02 deg (vs 132 deg before), no spikes.
+
+Side finding (not fixed): integrated `/imu/data_raw` gyro z over the same
+spin gave 710 deg, almost exactly half of odom. IMU stamps are a clean
+100 Hz, so the likely cause is gyro scale: `imu.c` assumes the power-on
++/-250 dps range (131 LSB/dps) for the WHO_AM_I 0x70 (MPU6500-class) part.
+Matters for the EKF, which fuses gyro yaw rate; not used by `slam_nav`.
+
 ### Open: stalls during goal following
 
 Stalls during the first goal are not explained by the Nav2 log (no
