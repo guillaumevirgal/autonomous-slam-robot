@@ -211,12 +211,18 @@ Verified: two back-to-back 4-turn in-place spins at 0.8 rad/s, the second
 crossing the next overflow (~5.5 turns since boot): odom yaw 1428.7 deg for
 1440 deg commanded (99.2%), max |wz| 0.887 rad/s, largest single-sample yaw
 step 2.02 deg (vs 132 deg before), no spikes.
+(2026-09-28: the spike fix holds, but this 99.2% is not evidence of correct
+rotation. Odom and the commanded rate share the same wrong `WHEEL_BASE_M`,
+so they agree regardless of what the robot physically does. See "Wheel
+base was half the real value" below.)
 
 Side finding (not fixed): integrated `/imu/data_raw` gyro z over the same
 spin gave 710 deg, almost exactly half of odom. IMU stamps are a clean
 100 Hz, so the likely cause is gyro scale: `imu.c` assumes the power-on
 +/-250 dps range (131 LSB/dps) for the WHO_AM_I 0x70 (MPU6500-class) part.
 Matters for the EKF, which fuses gyro yaw rate; not used by `slam_nav`.
+(2026-09-28: wrong diagnosis. The gyro was right; odom overstated rotation
+~1.96x. See below.)
 
 ### Open: stalls during goal following
 
@@ -230,3 +236,142 @@ replan, or cost-regulated scaling near inflated obstacles. Recording
 for the next goal to separate "Nav2 commands low speed" from "motors don't
 follow the command". Note: the first run happened with the sim-time bug
 active, so it may not be representative.
+(Resolved 2026-09-28, see "Nav2 speed limits matched to the drivetrain".)
+
+## 2026-09-28: Rotation, SLAM and LiDAR calibration on hardware
+
+### Context
+
+Goal runs with `slam_nav` still produced smeared maps with ghost walls and
+paths that did not point where the robot was going, even after the PCNT
+fix. Four independent causes were found, each from a recorded bag or a
+dedicated test, and fixed one at a time. All bags are in `~/bags/` on the
+Pi (`/cmd_vel_nav`, `/cmd_vel`, `/odom`, `/plan`, `/tf`, `/tf_static`,
+plus `/imu/data_raw` from `wheelbase_*` on).
+
+Bag recovery note: unplugging the LiPo reboots the Pi (see root
+`CLAUDE.md`), which leaves an MCAP bag without `metadata.yaml`.
+`ros2 bag reindex <dir> -s mcap` recovered the full 14.4 min recording.
+
+### Nav2 speed limits matched to the drivetrain
+
+From `goal_run_190907`: commanded 0.16-0.18 m/s gave 0.08 m/s measured.
+Top speed is ~0.085 m/s because of the `PID_OUT_MAX` 0.24 duty clamp,
+which is a hard limit, not a tuning choice: the N20s are the 3.3 V variant
+and the ceiling at 3S is ~0.26 duty. Nav2 was tuned for 0.20 m/s (sim), so
+both wheel PIDs sat saturated and could not steer.
+
+Fix, in `slam_nav.launch.py` only (the shared `nav2_params.yaml` keeps the
+sim tuning), with ~20% headroom:
+
+| Parameter | Sim | Hardware |
+|---|---|---|
+| RPP `desired_linear_vel` | 0.20 | 0.07 m/s |
+| velocity_smoother vx limits | +/-0.22 | +/-0.07 m/s |
+| RPP `rotate_to_heading_angular_vel` | 0.8 | 0.5 rad/s |
+| velocity_smoother wz limits | +/-1.0 | +/-0.6 rad/s |
+| behavior_server `max_rotational_vel` | 1.0 | 0.6 rad/s |
+| progress_checker `required_movement_radius` | 0.5 | 0.25 m |
+
+The angular ceiling is 2 x 0.085 / 0.230 = ~0.74 rad/s in place. The
+progress checker needed 0.05 m/s average, too close to the new cruise.
+Scalar overrides go through `RewrittenYaml` path rewrites; the smoother's
+list parameters are set as a second parameter dict on its `Node` because
+`RewrittenYaml` raises `TypeError` on list-element paths
+(`max_velocity.0`) and would turn a whole-list rewrite into a string.
+
+Verified (`speed_limit_181244`): commanded 0.052 m/s mean, measured 0.049
+m/s, 0 stalls in 3 goal segments.
+
+### Wheel base was half the real value
+
+Same bag: every slam_toolbox yaw correction opposed the direction of turn
+(61 deg of odom rotation, +21 deg correction, the matcher's search limit
+again), with no odom spikes at all. Cause: firmware
+`robot_kinematics.h` had `WHEEL_BASE_M 0.115` ("refine empirically") while
+the URDF had `track_width 0.216` ("TODO measure"). The firmware uses
+`WHEEL_BASE_M` both to turn `/cmd_vel` into wheel speeds and to integrate
+odom, so the robot physically turned 0.115 / L of what it reported, and
+the two always agreed with each other. Measured on the assembly: 0.225 m
+wheel centre to wheel centre. This also explains the 2026-09-24 "gyro reads
+half" finding: 710 / 1429 = 0.50 vs 0.115 / 0.225 = 0.51.
+
+2-turn in-place spin (0.5 rad/s, 25.13 s, floor mark as ground truth):
+
+| `WHEEL_BASE_M` | Odom | Gyro | Floor mark |
+|---|---|---|---|
+| 0.115 (09-24, 4 turns) | 1428.7 deg | 710 deg | not checked |
+| 0.225 | 722.0 deg | 702.8 deg | ~15-20 deg short |
+| 0.230 | 722.5 deg | 719.4 deg | ~1 deg |
+
+The effective (kinematic) track is 0.225 x 720 / 702.8 = 0.230 m,
+slightly wider than the wheel centres (tire contact/scrub). Firmware uses
+0.230; the URDF keeps the measured 0.225 as geometry (the sim has no
+scrub). The gyro scale (+/-250 dps, 131 LSB/dps) is correct and needs no
+change.
+
+### slam_toolbox ignored in-place rotation
+
+`wheelbase_200513`: map still soft. `map -> odom` changed only twice in
+8 min, i.e. 2 scans processed during ~3 min of Nav2 driving; one uncorrected
+wheel slip (odom +122 deg vs gyro +54 deg over one goal) was then fixed in
+a single capped -20.4 deg jump. Scan/odom/TF stamps were fine (scan
+received ~100 ms after stamp, one period; odom and TF current).
+
+Cause, from slam_toolbox `jazzy` `SlamToolbox::shouldProcessScan()`:
+unless `check_min_dist_and_heading_precisely` is true, it only checks
+`dist2 < 0.8 * min_dist2` and ignores `minimum_travel_heading`, so pure
+rotations never trigger a scan match. The parameter was backported to
+Jazzy (#819) and is present in the installed 2.8.5. Fix in
+`slam_toolbox_mapping.yaml`:
+
+```
+check_min_dist_and_heading_precisely: true
+minimum_travel_distance: 0.2   # was 0.5
+minimum_travel_heading: 0.2    # was 0.5 (and ignored)
+```
+
+Verified (`slamfix_201706`, 3 goals): 79 updates, per-update yaw
+correction median 0.40 deg, max 2.40 deg. Heading over the run: odom
++142.3, gyro +142.2, SLAM +144.3 deg.
+
+### LiDAR mounting yaw measured
+
+Same bag: between SLAM updates on straight segments the corrected
+trajectory moved -17.4 deg (weighted mean, n=3) sideways relative to the
+robot heading, which a diff-drive cannot do, with 5-8 cm translation
+corrections per update. The Pi had an uncommitted base->laser yaw of -30
+deg, a guess read off an earlier map while the wheel base was still wrong.
+
+Direct measurement: drove 0.602 m straight at 0.05 m/s (odom lateral
+0.000 m, dyaw +0.22 deg; gyro +0.49 deg), took per-beam median scans over
+1.5 s at rest before and after, and matched them with 2D point-to-point
+ICP (coarse search over direction, then SVD refinement): translation
+(+0.581, +0.083) m, |t| 0.587 m, rotation +0.86 deg, 79% of points within
+5 cm, inlier RMS 1.4 cm. The robot's forward axis is +8.1 deg in the laser
+frame, so base_link -> laser yaw = -8.1 deg (-0.1414 rad). Set in both
+`rplidar_c1.launch.py` (static TF) and `idefix.urdf.xacro`
+(`lidar_joint`), which must match.
+
+Verified 2026-10-10 (`laseryaw_221557`, 3 goals, fresh map): sideways
+offset on straight segments -1.1 deg weighted mean (n=5: -4.8, -4.1, +1.3,
++1.5, +0.7) vs -17.4 before. SLAM corrections per update: yaw median 0.80
+deg, max 2.00; translation median 1.3 cm (was 2.2), max 6.7 cm. Odom vs gyro
+per goal: +36.3/+37.9, +74.1/+75.3, -73.8/-72.0 deg. No stalls; commanded
+0.051-0.056 m/s, measured 0.047-0.052 m/s. (Over the whole 15 min bag odom
+and gyro differ by 12 deg: gyro bias integrated while parked between goals.)
+
+Map saved from this session, both pairs, on the Pi in `~/robot_ws/maps/`:
+`idefix_room_20261010.pgm/.yaml` (`nav2_map_server map_saver_cli`; the
+`nav2_map_saver` package name previously documented in
+`slam_mapping.launch.py` does not exist) and
+`idefix_room_20261010.data/.posegraph` (`/slam_toolbox/serialize_map`).
+
+### Low-battery alarm
+
+The continuous tone at 10.0 V was too intrusive during long sessions.
+`battery_task` now beeps twice (75 ms on, 100 ms gap) every 15 s while the
+alarm is active, starting immediately on entry; the pattern fits inside one
+500 ms task period. Threshold 9.5 V (3.17 V/cell under load), clear at 9.8
+V. Flashed 2026-10-10 with the wheel base change. Pending: check the ADC
+reading against a multimeter before relying on the 9.5 V margin.
