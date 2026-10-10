@@ -19,9 +19,17 @@ slam_toolbox:
 
     use_sim_time: false   # real hardware; sim uses idefix_simulation/config/slam_toolbox.yaml instead
 
-    # Only process a new scan if the robot moved at least this far; could lower minimum_travel_distance to 0.3 to get denser keyframes and a cleaner map, at the cost of a bigger graph.
-    minimum_travel_distance: 0.5
-    minimum_travel_heading: 0.5
+    # Process a new scan once the robot moved 0.2 m OR turned 0.2 rad (~11 deg).
+    # By default slam_toolbox's shouldProcessScan() only checks distance
+    # (heading is ignored), so in-place turns never trigger a scan match and
+    # heading drifts on odometry alone until 0.5 m of travel; one 2026-09-28 run
+    # got 2 updates in 3 min of Nav2 driving. check_min_dist_and_heading_precisely
+    # (slam_toolbox >= 2.8.5 on Jazzy) makes it honour minimum_travel_heading.
+    # Smaller steps also keep each correction well inside the matcher's ~20 deg
+    # angular search window.
+    check_min_dist_and_heading_precisely: true
+    minimum_travel_distance: 0.2
+    minimum_travel_heading: 0.2
 
     # Avoid processing scans faster than every this-many seconds, protects against a fast scanner flooding the matcher.
     minimum_time_interval: 0.5

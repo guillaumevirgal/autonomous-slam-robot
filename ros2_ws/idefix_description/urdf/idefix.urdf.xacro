@@ -5,7 +5,7 @@
   <!-- ===== MEASURED on the real parts (calipers) ===== -->
   <xacro:property name="wheel_radius"  value="0.022"/>   <!-- 44 mm dia -->
   <xacro:property name="wheel_width"   value="0.017"/>
-  <xacro:property name="track_width"   value="0.216"/>   <!-- TODO measure contact-to-contact on assembly; = plugin wheel_separation -->
+  <xacro:property name="track_width"   value="0.225"/>   <!-- measured wheel centre to wheel centre on the assembly; = plugin wheel_separation. Firmware WHEEL_BASE_M uses the effective 0.230 (tire scrub) -->
 
   <!-- ===== CHASSIS (radius is corrected diameter/2; confirm after measuring motor length) ===== -->
   <xacro:property name="base_radius"    value="0.125"/>  <!-- ~250 mm plate -->
@@ -188,9 +188,9 @@
     <child link="laser"/>
     <!-- Matches idefix_bringup's rplidar_c1.launch.py static transform exactly:
          93mm deck stack + 35mm measured to the scan-plane slit, +/- 10mm
-         uncertainty. yaw=0: motion-tested on hardware, no rotational offset
-         needed. Keep both in sync. -->
-    <origin xyz="0 0 0.125" rpy="0 0 0"/>
+         uncertainty. yaw=-8.1deg: measured by straight-drive scan matching,
+         see rplidar_c1.launch.py. Keep both in sync. -->
+    <origin xyz="0 0 0.125" rpy="0 0 -0.1414"/>
   </joint>
 
   <link name="camera_link">

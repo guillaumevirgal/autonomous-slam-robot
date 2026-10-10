@@ -14,7 +14,7 @@ Does not include Nav2. Run with:
   ros2 launch idefix_bringup slam_mapping.launch.py
 
 When done mapping, save both artifact pairs:
-  ros2 run nav2_map_saver map_saver_cli -f ~/robot_ws/maps/idefix_lab
+  ros2 run nav2_map_server map_saver_cli -f ~/robot_ws/maps/idefix_lab
   ros2 service call /slam_toolbox/serialize_map slam_toolbox/srv/SerializePoseGraph "{filename: '/home/idefix/robot_ws/maps/idefix_lab'}"
 """
 

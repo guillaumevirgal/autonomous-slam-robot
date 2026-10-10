@@ -38,9 +38,14 @@ def generate_launch_description():
         # Static TF base_link -> laser.
         # z = 0.125 m: deck stack (2 * floor_gap + deck_thickness = 93mm) plus
         # a measured 35mm from deck_3 top to the scan plane, +/- 10mm uncertainty.
-        # yaw = 0: an initial yaw=pi guess (LiDAR "mounted rotated 180 degrees")
-        # was motion-tested and found wrong -- forward-detected objects
-        # appeared behind the robot in the map. No yaw offset is needed.
+        # yaw = -8.1deg (-0.1414 rad): measured 2026-09-28 by driving 0.602 m
+        # straight (gyro dyaw < 0.5 deg) and ICP-matching median scans taken
+        # at rest before/after: the room shifted along +8.1 deg in the laser
+        # frame (|t| 0.587 m, 79% inliers < 5 cm, rms 1.4 cm), so
+        # base->laser yaw = -8.1 deg. Earlier values (pi, 0, -30 deg) were
+        # judged from SLAM runs while the firmware wheel base was wrong
+        # (0.115 vs 0.230 m), which corrupted every rotation. ROS yaw is
+        # positive counter-clockwise viewed from above.
         Node(
             package='tf2_ros',
             executable='static_transform_publisher',
@@ -48,7 +53,7 @@ def generate_launch_description():
             output='screen',
             arguments=[
                 '--x', '0', '--y', '0', '--z', '0.125',
-                '--yaw', '0', '--pitch', '0', '--roll', '0',
+                '--yaw', '-0.1414', '--pitch', '0', '--roll', '0',
                 '--frame-id', 'base_link',
                 '--child-frame-id', 'laser',
             ],

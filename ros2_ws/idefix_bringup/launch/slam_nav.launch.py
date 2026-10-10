@@ -68,9 +68,26 @@ def generate_launch_description():
     # inside the costmap sub-nodes. With no /clock, sim time stays at 0 and
     # the costmaps never publish (behavior_server then fails with "Costmap
     # is not available"). Rewrite every use_sim_time key in the file instead.
+    #
+    # Speed limits are also overridden here, not in nav2_params.yaml, so the
+    # sim keeps its 0.20 m/s tuning. The 0.24 PID duty clamp in the firmware
+    # caps the real wheels at ~0.085 m/s, i.e. ~0.74 rad/s in place with the
+    # 0.230 m effective track. Commanding more than that saturates both wheel
+    # PIDs, so the robot can no longer steer. Limits below leave ~20% headroom.
+    # progress_checker radius is halved to match: 0.5 m in 10 s needs an
+    # average of 0.05 m/s, too close to the new cruise speed.
+    # velocity_smoother's list params are set on its Node below instead:
+    # RewrittenYaml can't rewrite a list element (TypeError on 'x.0' paths)
+    # and would turn a whole-list rewrite into a string.
     configured_params = RewrittenYaml(
         source_file=nav2_params_file,
-        param_rewrites={'use_sim_time': use_sim_time},
+        param_rewrites={
+            'use_sim_time': use_sim_time,
+            'controller_server.ros__parameters.FollowPath.desired_linear_vel': '0.07',
+            'controller_server.ros__parameters.FollowPath.rotate_to_heading_angular_vel': '0.5',
+            'controller_server.ros__parameters.progress_checker.required_movement_radius': '0.25',
+            'behavior_server.ros__parameters.max_rotational_vel': '0.6',
+        },
         convert_types=True,
     )
 
@@ -128,7 +145,10 @@ def generate_launch_description():
         Node(
             package='nav2_velocity_smoother', executable='velocity_smoother',
             name='velocity_smoother', output='screen',
-            parameters=[configured_params],
+            parameters=[configured_params, {
+                'max_velocity': [0.07, 0.0, 0.6],   # [vx, vy, wz]
+                'min_velocity': [-0.07, 0.0, -0.6],
+            }],
             remappings=[
                 ('cmd_vel', 'cmd_vel_nav'),       # input from Nav2
                 ('cmd_vel_smoothed', 'cmd_vel'),  # output to the ESP32 via micro-ROS
