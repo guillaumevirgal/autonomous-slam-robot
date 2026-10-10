@@ -27,7 +27,7 @@ Header-only differential-drive kinematics for Idefix.
 
 // Wheel geometry
 #define WHEEL_RADIUS_M       0.022f      // metres
-#define WHEEL_BASE_M         0.115f      // metres, center-to-center between drive wheels, refine empirically
+#define WHEEL_BASE_M         0.230f      // metres, effective (kinematic) track: 0.225 measured wheel centre to centre, x720/702.8 from a gyro-checked 2-turn spin
 
 // Convert a delta count from one encoder into arc length (metres) at the wheel contact patch. Positive counts -> positive arc.
 static inline float kin_counts_to_metres(int64_t d_counts){

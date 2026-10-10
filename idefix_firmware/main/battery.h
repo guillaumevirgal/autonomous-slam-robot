@@ -17,8 +17,12 @@
 // the two (not a single threshold) is hysteresis: without it, a reading
 // sitting right at the threshold would chatter the buzzer on and off on
 // every sample from ordinary ADC/load noise.
-#define BATTERY_LOW_VOLTAGE_THRESHOLD_V   10.0f
-#define BATTERY_LOW_VOLTAGE_CLEAR_V       10.3f
+// 9.5 V = 3.17 V/cell for the 3S pack, read under load (Pi + motors sag
+// the pack ~0.2-0.3 V below rest). Still above the ~3.0 V/cell damage
+// floor, but ADC divider accuracy has not been checked against a
+// multimeter, so do not lower further without that check.
+#define BATTERY_LOW_VOLTAGE_THRESHOLD_V   9.5f
+#define BATTERY_LOW_VOLTAGE_CLEAR_V       9.8f
 
 /*
  * Bring up the ADC1 unit/channel for battery sense (with calibration if

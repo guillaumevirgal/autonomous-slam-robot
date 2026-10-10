@@ -100,6 +100,14 @@ static const char *TAG = "main";
 // need to sample it anywhere near motor/IMU rates.
 #define BATTERY_TASK_PERIOD_MS 500
 
+// Low-battery alarm pattern: two short beeps every 15 s instead of a
+// continuous tone, which was too intrusive during long test sessions.
+// The whole pattern (2 * on + 1 * gap = 250 ms) fits inside one 500 ms
+// battery_task period, so vTaskDelayUntil keeps its 2 Hz cadence.
+#define BUZZER_BEEP_ON_MS      75
+#define BUZZER_BEEP_GAP_MS     100
+#define BUZZER_ALARM_EVERY     30   // battery_task periods between patterns (30 * 500 ms = 15 s)
+
 // /cmd_vel watchdog: if no message received within this window, force zero
 // setpoints. 500 ms is 10 missed Nav2 controller frames at the default 20 Hz
 // rate. Adjust if the network is very lossy or if we want tighter safety.
@@ -311,7 +319,8 @@ static void imu_task(void *arg){
 }
 
 // -------------------------------------------------------------------------
-// battery_task: 2 Hz battery voltage poll, drives the low-voltage buzzer.
+// battery_task: 2 Hz battery voltage poll, drives the low-voltage buzzer
+// (two short beeps every 15 s while the alarm is active).
 // Independent of every other task, touches neither PID/motor state nor
 // micro-ROS. Hysteresis (BATTERY_LOW_VOLTAGE_THRESHOLD_V to turn on,
 // BATTERY_LOW_VOLTAGE_CLEAR_V to turn back off) lives here rather than in
@@ -323,7 +332,8 @@ static void battery_task(void *arg){
 
     TickType_t last_wake = xTaskGetTickCount();
     const TickType_t period = pdMS_TO_TICKS(BATTERY_TASK_PERIOD_MS);
-    bool buzzer_on = false;
+    bool alarm_on = false;
+    int alarm_ctr = 0;
     int log_divider = 0;
 
     while (1) {
@@ -341,22 +351,38 @@ static void battery_task(void *arg){
             continue;
         }
 
-        if (!buzzer_on && voltage_v <= BATTERY_LOW_VOLTAGE_THRESHOLD_V) {
-            buzzer_on = true;
-            battery_set_buzzer(true);
-            ESP_LOGW(TAG, "battery: %.2f V at or below %.2f V threshold, buzzer ON",
+        if (!alarm_on && voltage_v <= BATTERY_LOW_VOLTAGE_THRESHOLD_V) {
+            alarm_on = true;
+            alarm_ctr = 0;   // beep right away on entry, then every 15 s
+            ESP_LOGW(TAG, "battery: %.2f V at or below %.2f V threshold, alarm ON",
                      voltage_v, BATTERY_LOW_VOLTAGE_THRESHOLD_V);
-        } else if (buzzer_on && voltage_v >= BATTERY_LOW_VOLTAGE_CLEAR_V) {
-            buzzer_on = false;
+        } else if (alarm_on && voltage_v >= BATTERY_LOW_VOLTAGE_CLEAR_V) {
+            alarm_on = false;
             battery_set_buzzer(false);
-            ESP_LOGI(TAG, "battery: %.2f V at or above %.2f V clear point, buzzer OFF",
+            ESP_LOGI(TAG, "battery: %.2f V at or above %.2f V clear point, alarm OFF",
                      voltage_v, BATTERY_LOW_VOLTAGE_CLEAR_V);
+        }
+
+        if (alarm_on) {
+            if (alarm_ctr == 0) {
+                battery_set_buzzer(true);
+                vTaskDelay(pdMS_TO_TICKS(BUZZER_BEEP_ON_MS));
+                battery_set_buzzer(false);
+                vTaskDelay(pdMS_TO_TICKS(BUZZER_BEEP_GAP_MS));
+                battery_set_buzzer(true);
+                vTaskDelay(pdMS_TO_TICKS(BUZZER_BEEP_ON_MS));
+                battery_set_buzzer(false);
+            }
+            alarm_ctr++;
+            if (alarm_ctr >= BUZZER_ALARM_EVERY) {
+                alarm_ctr = 0;
+            }
         }
 
         log_divider++;
         if (log_divider >= 20) {   // ~once per 10 s at 2 Hz
             log_divider = 0;
-            ESP_LOGI(TAG, "battery: %.2f V, buzzer %s", voltage_v, buzzer_on ? "ON" : "off");
+            ESP_LOGI(TAG, "battery: %.2f V, alarm %s", voltage_v, alarm_on ? "ON" : "off");
         }
     }
 }
