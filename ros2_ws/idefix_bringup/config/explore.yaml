@@ -1,0 +1,22 @@
+# explore_lite (m-explore-ros2, vendored at ros2_ws/m-explore-ros2, commit
+# 326cf8a): frontier-based autonomous exploration on top of slam_nav. It
+# picks the most promising frontier between known free space and unknown
+# space in slam_toolbox's /map and sends it to Nav2's navigate_to_pose.
+explore_node:
+  ros__parameters:
+    use_sim_time: false
+    robot_base_frame: base_link
+    costmap_topic: /map                  # slam_toolbox's live occupancy grid
+    costmap_updates_topic: /map_updates
+    visualize: true                      # frontiers as markers on explore/frontiers
+    planner_frequency: 0.2               # re-pick a frontier every 5 s
+    progress_timeout: 30.0               # seconds without getting closer before a frontier
+                                         # is blacklisted; progress is re-measured as the
+                                         # robot approaches, so slow driving never trips it
+    potential_scale: 3.0                 # weight of distance to the frontier
+    orientation_scale: 0.0
+    gain_scale: 1.0                      # weight of frontier size
+    transform_tolerance: 0.3
+    min_frontier_size: 0.4               # default 0.75 m would end exploration early in a
+                                         # small, cluttered room
+    return_to_init: true                 # drive back to the start pose when done

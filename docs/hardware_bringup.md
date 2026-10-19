@@ -486,3 +486,54 @@ top-down view. Over `ssh -X` from WSL2 RViz renders at ~1 fps (software GL
 on the Pi, frames sent over Wi-Fi), so smooth videos should be made by
 replaying a bag that includes `/map`, `/scan` and the costmaps into RViz
 running natively in WSL2.
+
+## 2026-10-20: Nav2 path-following tuning, autonomous exploration
+
+### Path-following tuning
+
+From `~/bags/ekf_floor_225648` (3 goals, 2026-10-19): ~40% of each goal was
+spent rotating in place in ~20 short episodes, cruise sat at the 0.05 m/s
+regulation floor, and every goal ended 19-20 cm out (= `xy_goal_tolerance`).
+Causes: velocity-scaled lookahead clamps to its 0.2 m minimum at 0.07 m/s, so
+the carrot follows the NavFn grid zigzags and keeps crossing the 45 deg
+rotate-to-heading threshold; cost-regulated scaling is active almost
+everywhere in a small room. Hardware overrides in `slam_nav.launch.py`:
+fixed 0.35 m lookahead, cost-regulated scaling off (collision detection
+stays on), approach slowdown from 0.3 m, goal tolerance 0.10 m.
+
+Result (`~/bags/navtune_001414`, 3 goals of 1.1-2.9 m):
+
+| | Before | After |
+|---|---|---|
+| Rotate in place | 41 / 39 / 42 % | 4 / 13 / 3 % |
+| Rotate episodes | 64 (3 goals) | 4 (3 goals) |
+| Mean cruise | 0.051-0.056 m/s | 0.066-0.068 m/s |
+| Final position error | 19.4-20.5 cm | 8.9-9.2 cm |
+
+### Autonomous exploration (explore_lite)
+
+`m-explore-ros2` vendored as a submodule (`ros2_ws/m-explore-ros2`,
+`326cf8a`); only `explore_lite_msgs` and `explore_lite` are built:
+
+```
+colcon build --packages-select explore_lite_msgs explore_lite --cmake-args -DCMAKE_BUILD_TYPE=Release
+ros2 launch idefix_bringup slam_nav.launch.py
+ros2 launch idefix_bringup explore.launch.py      # once Nav2 is active
+```
+
+Config `config/explore.yaml`: frontiers from `/map`, minimum frontier 0.4 m
+(default 0.75 m ends early in a small room), 30 s progress timeout, return
+to the start pose when done. RViz shows `/explore/frontiers`.
+
+First run: Nav2 reported 563 "Goal succeeded" in ~5 min while the robot sat
+still. Frontier targets inside a wall's inflation were unreachable; NavFn's
+0.5 m tolerance planned to the nearest free cell, which was the robot's own
+position, giving a zero-length path that the controller reports as reached
+instantly, and explore_lite re-sent the same frontier until its progress
+timeout. Fix: `planner_server GridBased.tolerance` 0.5 -> 0.15 m on hardware,
+so such goals fail and get blacklisted. Second run (`~/bags/explore_002246`,
+fresh map): explored the reachable space, then tried the three remaining
+frontiers (behind furniture, no path within 0.15 m), declared "All
+frontiers traversed/tried out" after ~2.5 min and stopped. Map
+`idefix_room_20261020_explore`. A larger, less cluttered space is needed to
+show a long exploration run.
