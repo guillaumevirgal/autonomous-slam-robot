@@ -194,3 +194,27 @@ esp_err_t imu_read(imu_sample_t *out)
 
     return ESP_OK;
 }
+
+void imu_track_gyro_bias(const imu_sample_t *still_sample)
+{
+    if (still_sample == NULL) {
+        return;
+    }
+
+    // The sample already has the current bias subtracted, so it IS the
+    // residual bias while the robot is still.
+    if (fabsf(still_sample->gyro_x_dps) > IMU_BIAS_TRACK_MAX_DPS ||
+        fabsf(still_sample->gyro_y_dps) > IMU_BIAS_TRACK_MAX_DPS ||
+        fabsf(still_sample->gyro_z_dps) > IMU_BIAS_TRACK_MAX_DPS) {
+        return;
+    }
+
+    s_gyro_bias_x_dps += IMU_BIAS_TRACK_ALPHA * still_sample->gyro_x_dps;
+    s_gyro_bias_y_dps += IMU_BIAS_TRACK_ALPHA * still_sample->gyro_y_dps;
+    s_gyro_bias_z_dps += IMU_BIAS_TRACK_ALPHA * still_sample->gyro_z_dps;
+}
+
+float imu_gyro_bias_z_dps(void)
+{
+    return s_gyro_bias_z_dps;
+}

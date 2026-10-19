@@ -130,6 +130,14 @@ static const char *TAG = "main";
 // stationary wheel. Coast is safer and quieter.
 #define COAST_EPS_RAD_S        0.05f
 
+// Standstill detection for gyro bias tracking (see imu_track_gyro_bias()).
+// Filtered wheel speed below this counts as stopped: 0.1 rad/s is 2.2 mm/s
+// at the rim, above the ~0.03 rad/s dither left after the moving average.
+// The hold-off lets the chassis settle after a stop (coast-down, caster
+// swivel) before any sample is treated as pure bias.
+#define STILL_EPS_RAD_S        0.1f
+#define STILL_HOLDOFF_CYCLES   100     // control cycles: 100 * 10 ms = 1 s
+
 // -------------------------------------------------------------------------
 // Encoder velocity filter (unchanged from Stage 2)
 // -------------------------------------------------------------------------
@@ -165,6 +173,10 @@ static _Atomic float   g_imu_gyro_x_dps   = 0.0f;
 static _Atomic float   g_imu_gyro_y_dps   = 0.0f;
 static _Atomic float   g_imu_gyro_z_dps   = 0.0f;
 static _Atomic int64_t g_imu_snapshot_time_us = 0;   // esp_timer_get_time() at snapshot
+
+// Written by control_task, read by imu_task: true once both wheels have been
+// commanded to coast and measured stopped for STILL_HOLDOFF_CYCLES.
+static _Atomic bool    g_robot_still      = false;
 
 // -------------------------------------------------------------------------
 // PID and filter state (control_task private)
@@ -308,12 +320,20 @@ static void imu_task(void *arg){
         atomic_store(&g_imu_gyro_z_dps, sample.gyro_z_dps);
         atomic_store(&g_imu_snapshot_time_us, esp_timer_get_time());
 
+        // After publishing the sample: the bias update only affects later
+        // samples, so this sample stays consistent with what was published.
+        bool still = atomic_load(&g_robot_still);
+        if (still) {
+            imu_track_gyro_bias(&sample);
+        }
+
         log_divider++;
         if (log_divider >= 100) {   // ~once per second at 100 Hz
             log_divider = 0;
-            ESP_LOGI(TAG, "IMU accel(g)=[%.3f %.3f %.3f] gyro(dps)=[%.2f %.2f %.2f]",
+            ESP_LOGI(TAG, "IMU accel(g)=[%.3f %.3f %.3f] gyro(dps)=[%.2f %.2f %.2f] bias_z=%.4f dps still=%d",
                      sample.accel_x_g, sample.accel_y_g, sample.accel_z_g,
-                     sample.gyro_x_dps, sample.gyro_y_dps, sample.gyro_z_dps);
+                     sample.gyro_x_dps, sample.gyro_y_dps, sample.gyro_z_dps,
+                     imu_gyro_bias_z_dps(), still ? 1 : 0);
         }
     }
 }
@@ -565,6 +585,7 @@ static void control_task(void *arg){
 
     TickType_t last_wake = xTaskGetTickCount();
     const TickType_t period = pdMS_TO_TICKS(CONTROL_PERIOD_MS);
+    int still_cycles = 0;
 
     while (1) {
         vTaskDelayUntil(&last_wake, period);         // wait for next 10 ms slot
@@ -629,6 +650,21 @@ static void control_task(void *arg){
         // Command the motors.
         motor_set_duty(MOTOR_A, duty_a);
         motor_set_duty(MOTOR_B, duty_b);
+
+        // Standstill for gyro bias tracking: both wheels coasting by command
+        // AND measured stopped, continuously for the hold-off. Requiring the
+        // command as well as the measurement means a wheel stalled against
+        // an obstacle while commanded to drive never counts as still.
+        bool still_now = fabsf(sp_a) < COAST_EPS_RAD_S && fabsf(sp_b) < COAST_EPS_RAD_S &&
+                         fabsf(meas_a_filt) < STILL_EPS_RAD_S && fabsf(meas_b_filt) < STILL_EPS_RAD_S;
+        if (still_now) {
+            if (still_cycles < STILL_HOLDOFF_CYCLES) {
+                still_cycles++;
+            }
+        } else {
+            still_cycles = 0;
+        }
+        atomic_store(&g_robot_still, still_cycles >= STILL_HOLDOFF_CYCLES);
 
         // Publish encoder snapshot for the uros_task to integrate, as one
         // group under g_snapshot_mux -- see odom_timer_callback.
