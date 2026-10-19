@@ -456,7 +456,7 @@ cm. Sideways offset on straight segments +1.8 deg (n=7). No stalls;
 commanded 0.051-0.055 m/s, measured 0.048-0.053 m/s. Map saved as
 `~/robot_ws/maps/idefix_room_20261019_ekf.{pgm,yaml,data,posegraph}`.
 
-### Open: ESP32 timestamps after a Pi reboot
+### ESP32 timestamps after a Pi reboot (fixed)
 
 The Pi has no RTC. After a cold boot (LiPo plugged in), the ESP32 synced
 its clock to the Pi at the micro-ROS handshake, then systemd-timesyncd
@@ -467,6 +467,15 @@ boot). `rmw_uros_sync_session()` runs once at boot, so `/odom` and
 timed out waiting for `map -> base_link`, aborting Nav2 bringup. Workaround:
 check `timedatectl` shows "System clock synchronized: yes" before resetting
 the ESP32 (or reset it again after), then restart `slam_nav`.
+
+Fixed the same day: `uros_task` now calls `rmw_uros_sync_session(100)` every
+10 s (boot-time sync unchanged) and logs any step above 10 ms. Test with the
+agent running: `sudo timedatectl set-ntp false; sudo date -s "+60 seconds"`
+moved the `/odom` stamp lag from 0.009 s to 60.009 s; within 10 s the ESP32
+logged "time re-sync stepped stamps by 59.998 s" and the lag was back to
+0.009 s. Re-enabling NTP stepped the clock back (lag -59.936 s), followed by
+"-59.946 s" and 0.009 s again. After a cold boot, stamps are now wrong for
+at most 10 s after the NTP step instead of until a manual ESP32 reset.
 
 ### RViz config for hardware
 

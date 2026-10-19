@@ -95,6 +95,17 @@ static const char *TAG = "main";
 // sample gets published with no decimation/loss.
 #define IMU_TIMER_PERIOD_MS    10
 
+// Periodic clock re-sync with the agent. The Pi has no RTC: after a cold
+// boot, systemd-timesyncd steps its clock (by ~2 min on 2026-10-19) a few
+// minutes AFTER the ESP32's boot-time sync, leaving /odom and /imu stamped
+// in the past until the next sync, and slam_toolbox drops every scan.
+// Re-syncing every 10 s bounds that window. The short timeout keeps a lost
+// reply from stalling the 30 Hz odom / 100 Hz IMU timers on this task; a
+// successful round-trip over the 921600 baud link takes a few ms.
+#define TIME_RESYNC_PERIOD_US  10000000LL
+#define TIME_RESYNC_TIMEOUT_MS 100
+#define TIME_STEP_LOG_NS       10000000LL   // log offset changes above 10 ms
+
 // Battery voltage poll period: 2 Hz. Pack voltage is a slow-moving
 // quantity (seconds to change meaningfully under normal discharge), no
 // need to sample it anywhere near motor/IMU rates.
@@ -817,10 +828,11 @@ static void uros_task(void *arg){
     RCCHECK(rclc_executor_add_timer(&executor, &timer));
     RCCHECK(rclc_executor_add_timer(&executor, &imu_timer));
 
-    // Try to sync our clock to the agent's clock once at startup. If the sync
-    // fails (agent slow to respond), we fall through and use local time. It
-    // is safe to re-attempt periodically later; for bringup, once is enough.
+    // Sync our clock to the agent's at startup. If the sync fails (agent slow
+    // to respond), we fall through and use local time until the periodic
+    // re-sync in the loop below succeeds.
     rmw_uros_sync_session(1000);                     // 1000 ms timeout
+    int64_t last_resync_us = esp_timer_get_time();
 
     ESP_LOGI(TAG, "micro-ROS executor ready, spinning");
 
@@ -829,6 +841,26 @@ static void uros_task(void *arg){
     // CPU briefly so lower-priority tasks can run.
     while (1) {
         rclc_executor_spin_some(&executor, RCL_MS_TO_NS(10));
+
+        int64_t now_us = esp_timer_get_time();
+        if (now_us - last_resync_us >= TIME_RESYNC_PERIOD_US) {
+            last_resync_us = now_us;
+            // Offset before/after, both read against the same local clock
+            // instant (corrected for the time the sync itself took), so the
+            // difference is the step applied to our stamps.
+            int64_t before_ns = rmw_uros_epoch_nanos();
+            int64_t t0_us = esp_timer_get_time();
+            if (rmw_uros_sync_session(TIME_RESYNC_TIMEOUT_MS) == RMW_RET_OK) {
+                int64_t elapsed_ns = (esp_timer_get_time() - t0_us) * 1000LL;
+                int64_t step_ns = rmw_uros_epoch_nanos() - elapsed_ns - before_ns;
+                if (step_ns > TIME_STEP_LOG_NS || step_ns < -TIME_STEP_LOG_NS) {
+                    ESP_LOGW(TAG, "time re-sync stepped stamps by %.3f s", (double) step_ns * 1e-9);
+                }
+            } else {
+                ESP_LOGW(TAG, "time re-sync failed (no reply within %d ms)", TIME_RESYNC_TIMEOUT_MS);
+            }
+        }
+
         vTaskDelay(pdMS_TO_TICKS(1));
     }
 }
