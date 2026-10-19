@@ -22,10 +22,16 @@ import os
 
 from ament_index_python.packages import get_package_share_directory
 from launch import LaunchDescription
-from launch.actions import EmitEvent, IncludeLaunchDescription, RegisterEventHandler
+from launch.actions import (
+    DeclareLaunchArgument,
+    EmitEvent,
+    IncludeLaunchDescription,
+    RegisterEventHandler,
+)
+from launch.conditions import IfCondition, UnlessCondition
 from launch.events import matches_action
 from launch.launch_description_sources import PythonLaunchDescriptionSource
-from launch.substitutions import Command
+from launch.substitutions import Command, LaunchConfiguration
 from launch_ros.actions import LifecycleNode, Node
 from launch_ros.event_handlers import OnStateTransition
 from launch_ros.events.lifecycle import ChangeState
@@ -34,6 +40,16 @@ from lifecycle_msgs.msg import Transition
 
 
 def generate_launch_description():
+    use_ekf_arg = DeclareLaunchArgument(
+        'use_ekf',
+        default_value='true',
+        description='Publish odom -> base_footprint from the robot_localization '
+                    'EKF (wheel odom + gyro, rejects wheel slip in yaw) instead '
+                    'of odom_tf_broadcaster (wheel odom only). Exactly one of '
+                    'the two runs.'
+    )
+    use_ekf = LaunchConfiguration('use_ekf')
+
     bringup_share = get_package_share_directory('idefix_bringup')
     description_share = get_package_share_directory('idefix_description')
 
@@ -61,6 +77,16 @@ def generate_launch_description():
         package='idefix_base',
         executable='odom_tf_broadcaster',
         output='screen',
+        condition=UnlessCondition(use_ekf),
+    )
+
+    ekf_node = Node(
+        package='robot_localization',
+        executable='ekf_node',
+        name='ekf_filter_node',
+        output='screen',
+        parameters=[os.path.join(bringup_share, 'config', 'ekf.yaml')],
+        condition=IfCondition(use_ekf),
     )
 
     # async_slam_toolbox_node is a lifecycle node: it stays unconfigured
@@ -98,9 +124,11 @@ def generate_launch_description():
     )
 
     return LaunchDescription([
+        use_ekf_arg,
         rplidar_launch,
         robot_state_publisher_node,
         odom_tf_broadcaster_node,
+        ekf_node,
         slam_activate,        # register handler before emitting configure
         slam_toolbox_node,
         slam_configure,

@@ -1,13 +1,19 @@
 # ekf.yaml
 # robot_localization EKF fusing wheel odometry and IMU angular rate into a
-# single odom -> base_link estimate. Becomes the sole publisher of that TF
-# edge; odom_tf_broadcaster must NOT be run at the same time (see
-# ekf.launch.py). Covariance tuning intentionally deferred, see the commit
-# that added this file.
+# single odom -> base_footprint estimate. Becomes the sole publisher of that
+# TF edge; odom_tf_broadcaster must NOT be run at the same time (slam_mapping
+# / slam_nav do the swap via use_ekf:=true).
+#
+# Sensor weighting comes from the message covariances set in firmware:
+# /odom twist vyaw variance 0.01 vs /imu/data_raw angular_velocity 0.0001,
+# so yaw rate follows the gyro (immune to wheel slip) and vx comes from the
+# wheels. Replay of ~/bags/wheelbase_200513 (one goal with wheel slip:
+# odom +122.1 deg, gyro +53.5 deg) gave EKF +53.9 deg.
 
 ekf_filter_node:
   ros__parameters:
-    frequency: 50.0            # higher gains nothing: fastest input is 100 Hz IMU, slowest is 30 Hz odom
+    frequency: 30.0            # = /odom rate. At 50 Hz the filter missed its deadline in bursts
+                               # whenever other ros2 processes loaded the Pi (load avg ~2.9)
     two_d_mode: true           # planar differential drive; keeps z/roll/pitch locked to zero rather
                                 # than letting the filter wander in unobservable dimensions
     sensor_timeout: 0.2
@@ -16,7 +22,9 @@ ekf_filter_node:
     publish_tf: true
     world_frame: odom
     odom_frame: odom
-    base_link_frame: base_link
+    base_link_frame: base_footprint   # not base_link: robot_state_publisher already owns
+                                      # base_footprint -> base_link (URDF), and slam_toolbox
+                                      # uses base_footprint as its base frame
     map_frame: map
 
     # /odom: fuse body-frame velocities only (vx, vyaw), not pose. The wheel

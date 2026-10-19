@@ -17,9 +17,10 @@ slam_toolbox hasn't seen yet. Goals outside the current /map bounds are
 rejected by the global costmap though; send goals inside the mapped area
 or near its edge.
 
-TF ownership: odom -> base_footprint comes from odom_tf_broadcaster (via
-slam_mapping.launch.py). Do NOT run ekf.launch.py alongside this, since both
-would publish into the odom -> base chain.
+TF ownership: odom -> base_footprint comes from the EKF by default, or from
+odom_tf_broadcaster with use_ekf:=false (both via slam_mapping.launch.py,
+which starts exactly one of them). Do NOT also run ekf.launch.py alongside
+this, since both would publish into the odom -> base chain.
 
 Run it with:
   ros2 launch idefix_bringup slam_nav.launch.py
@@ -47,6 +48,13 @@ def generate_launch_description():
         'use_sim_time',
         default_value='false',
         description='Use simulation clock; this launch file targets real hardware.'
+    )
+
+    use_ekf_arg = DeclareLaunchArgument(
+        'use_ekf',
+        default_value='true',
+        description='Passed to slam_mapping.launch.py: odom -> base_footprint '
+                    'from the EKF (wheel odom + gyro) instead of wheel odom only.'
     )
 
     nav2_delay_arg = DeclareLaunchArgument(
@@ -94,7 +102,8 @@ def generate_launch_description():
     slam_mapping_launch = IncludeLaunchDescription(
         PythonLaunchDescriptionSource(
             PathJoinSubstitution([bringup_share, 'launch', 'slam_mapping.launch.py'])
-        )
+        ),
+        launch_arguments={'use_ekf': LaunchConfiguration('use_ekf')}.items(),
     )
 
     # Nav2 lifecycle-managed nodes, order matters. No map_server: /map
@@ -168,6 +177,7 @@ def generate_launch_description():
 
     return LaunchDescription([
         use_sim_time_arg,
+        use_ekf_arg,
         nav2_delay_arg,
         slam_mapping_launch,
         TimerAction(period=nav2_delay, actions=[nav2_nodes]),

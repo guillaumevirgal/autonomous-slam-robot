@@ -1,13 +1,16 @@
 """EKF launch for Idefix: fuses /odom and /imu/data_raw into a single
-odom -> base_link estimate via robot_localization's ekf_node.
+odom -> base_footprint estimate via robot_localization's ekf_node.
+
+Standalone use only (EKF without SLAM/Nav2). slam_mapping.launch.py and
+slam_nav.launch.py start the same node themselves with use_ekf:=true.
 
 TF ownership: once this is running, ekf_filter_node is the sole publisher
-of odom -> base_link (ekf.yaml sets publish_tf: true). Do NOT also run
+of odom -> base_footprint (ekf.yaml sets publish_tf: true). Do NOT also run
 idefix_base's odom_tf_broadcaster alongside this launch file: both would
 publish the same TF edge, which is a silent-but-lethal double-broadcast
 bug (looks like localization drift/oscillation later, not an obvious
-error). Verify with `ros2 run tf2_tools view_frames` that odom -> base_link
-has exactly one publisher, ekf_filter_node, before trusting the fused
+error). Verify with `ros2 run tf2_tools view_frames` that odom ->
+base_footprint has exactly one publisher, ekf_filter_node, before trusting the fused
 output.
 
 Run it with:  ros2 launch idefix_bringup ekf.launch.py
