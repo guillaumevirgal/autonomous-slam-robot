@@ -375,3 +375,105 @@ alarm is active, starting immediately on entry; the pattern fits inside one
 500 ms task period. Threshold 9.5 V (3.17 V/cell under load), clear at 9.8
 V. Flashed 2026-10-10 with the wheel base change. Pending: check the ADC
 reading against a multimeter before relying on the 9.5 V margin.
+
+## 2026-10-19: EKF in the SLAM/Nav2 stack, standstill gyro bias tracking
+
+### Context
+
+`ekf.yaml` (robot_localization 3.8.3, wheel vx + vyaw, gyro vyaw) existed
+since 2026-09-14 but had never been used with SLAM or Nav2. Goal: replace
+`odom_tf_broadcaster` with the EKF as the source of `odom ->
+base_footprint`, so heading follows the gyro and ignores wheel slip.
+
+### Frame and launch wiring
+
+- `ekf.yaml` had `base_link_frame: base_link`, but `robot_state_publisher`
+  already owns `base_footprint -> base_link` (URDF) and slam_toolbox uses
+  `base_footprint`; running it would have given `base_link` two parents.
+  Now `base_footprint`.
+- New launch argument `use_ekf` on `slam_mapping.launch.py` (passed through
+  by `slam_nav.launch.py`), default `true`: starts `ekf_filter_node` or
+  `odom_tf_broadcaster`, never both. Verified with `tf2_monitor`: one
+  publisher of `odom -> base_footprint`.
+- Weighting comes from the firmware message covariances: `/odom` twist
+  vyaw 0.01, `/imu/data_raw` angular velocity 0.0001 (measured std at rest
+  0.0024 rad/s), so yaw rate follows the gyro and vx the wheels.
+- `frequency: 50 -> 30` (= `/odom` rate): at 50 Hz the filter logged bursts
+  of "Failed to meet update rate" whenever other `ros2` CLI processes
+  loaded the Pi (load average ~2.9).
+
+### Offline check on a wheel-slip bag
+
+Replayed `~/bags/wheelbase_200513` (`/odom`, `/imu/data_raw`, `/tf_static`,
+`--clock`) through the EKF with `use_sim_time`. Per goal, odom / gyro /
+EKF: +4.4 / +5.4 / +4.7, **+122.1 / +53.5 / +53.9** (wheel slip), +118.9 /
++119.4 / +118.7 deg. Path length 3.371 vs 3.384 m.
+
+### Gyro bias drifts after boot -> standstill bias tracking
+
+Parked with the EKF, heading drifted 0.58 deg/min: the boot-time gyro bias
+(`imu_init()`, 200 samples) goes stale as the die warms up (measured
++0.000289 rad/s residual ~15 min after reset), and the EKF trusts the gyro
+~100x more than the wheels' exact zero.
+
+Fix in firmware: `control_task` sets `g_robot_still` once both wheels are
+commanded to coast (|setpoint| < `COAST_EPS_RAD_S`) AND measured below 0.1
+rad/s (filtered) for 1 s; while set, `imu_task` calls the new
+`imu_track_gyro_bias()`, which folds each sample's residual into the bias
+with alpha 0.0005 per 100 Hz sample (tau 20 s). Samples above 1 deg/s on
+any axis are skipped, so the robot being turned by hand with stopped wheels
+is not absorbed as bias. The 1 Hz IMU console log now shows `bias_z` and
+`still`.
+
+Verified:
+- Parked 10 min (robot on a stand, `slam_nav use_ekf:=true`): EKF yaw
+  within -0.09..-0.40 deg of start, no trend (was ~0.58 deg/min, i.e.
+  ~-6 deg over 10 min). Bias settled from -0.044 (just after reset) to
+  ~-0.055 deg/s, wandering +/-0.005 deg/s.
+- Commanded motion (LiPo unplugged, wheels not powered): `still` drops to
+  0 on the command alone and the bias freezes (-0.0496 for 6 s driving,
+  -0.0502 for 6 s turning), resumes ~1 s after the command ends.
+- Wheels turned by hand, unpowered: `still` = 0 while either wheel moves,
+  back to 1 ~1 s after release. Hand-rocking of the chassis during short
+  pauses moved the bias ~0.005 deg/s (-0.0531 -> -0.0585) before it
+  relaxed back: worst case ~0.3 deg/min for about a minute.
+
+### Floor test (`~/bags/ekf_floor_225648`, fresh map)
+
+2-turn spin (0.5 rad/s, 25.13 s): odom 721.5, gyro 717.0, EKF 717.2 deg;
+bias frozen at -0.0660 deg/s throughout. Then 3 Nav2 goals:
+
+| Phase | EKF | Gyro | Net SLAM correction |
+|---|---|---|---|
+| Spin | +717.2 | +717.0 | -0.2 |
+| Goal 1 | +24.7 | +25.2 | -1.0 |
+| Goal 2 | +60.1 | +59.6 | +0.2 |
+| Goal 3 | +101.3 | +102.0 | -1.6 |
+
+150 scan matches, yaw correction per update median 0.40 deg (individual
+ones up to 3.8 deg alternate in sign and cancel), translation median 1.0
+cm. Sideways offset on straight segments +1.8 deg (n=7). No stalls;
+commanded 0.051-0.055 m/s, measured 0.048-0.053 m/s. Map saved as
+`~/robot_ws/maps/idefix_room_20261019_ekf.{pgm,yaml,data,posegraph}`.
+
+### Open: ESP32 timestamps after a Pi reboot
+
+The Pi has no RTC. After a cold boot (LiPo plugged in), the ESP32 synced
+its clock to the Pi at the micro-ROS handshake, then systemd-timesyncd
+stepped the Pi clock ~116 s forward (first NTP contact 2.5 min after
+boot). `rmw_uros_sync_session()` runs once at boot, so `/odom` and
+`/imu/data_raw` stayed 116 s behind: slam_toolbox dropped every scan
+("Message Filter dropping message ... discarding") and the global costmap
+timed out waiting for `map -> base_link`, aborting Nav2 bringup. Workaround:
+check `timedatectl` shows "System clock synchronized: yes" before resetting
+the ESP32 (or reset it again after), then restart `slam_nav`.
+
+### RViz config for hardware
+
+`ros2 launch idefix_bringup rviz.launch.py` opens `rviz/slam_nav.rviz`
+(derived from the sim's `nav2.rviz`): costmaps in costmap colours, Transient
+Local on `/map` and both costmaps, `/scan` Best Effort, fixed frame `map`,
+top-down view. Over `ssh -X` from WSL2 RViz renders at ~1 fps (software GL
+on the Pi, frames sent over Wi-Fi), so smooth videos should be made by
+replaying a bag that includes `/map`, `/scan` and the costmaps into RViz
+running natively in WSL2.
