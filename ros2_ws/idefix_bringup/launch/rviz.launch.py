@@ -4,8 +4,8 @@ Opens rviz/slam_nav.rviz: map, both costmaps (costmap colours), global plan,
 LaserScan (Best Effort), TF and RobotModel, fixed frame map, top-down view,
 2D Goal Pose tool ready. No display needs to be added or adjusted by hand.
 
-From WSL2, RViz2 runs on the Pi and displays over X11 (cross-machine DDS
-does not work from WSL2, see the root CLAUDE.md):
+From WSL2, RViz2 runs on the Pi and displays over X11 (outbound UDP from
+WSL2 never reaches the Pi's LAN, so cross-machine DDS does not work):
 
   ssh -O exit idefix; ssh -X idefix
   source /opt/ros/jazzy/setup.bash && source ~/robot_ws/install/setup.bash

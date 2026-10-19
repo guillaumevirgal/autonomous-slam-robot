@@ -249,8 +249,8 @@ dedicated test, and fixed one at a time. All bags are in `~/bags/` on the
 Pi (`/cmd_vel_nav`, `/cmd_vel`, `/odom`, `/plan`, `/tf`, `/tf_static`,
 plus `/imu/data_raw` from `wheelbase_*` on).
 
-Bag recovery note: unplugging the LiPo reboots the Pi (see root
-`CLAUDE.md`), which leaves an MCAP bag without `metadata.yaml`.
+Bag recovery note: unplugging the LiPo reboots the Pi (the Pi runs from
+the same pack), which leaves an MCAP bag without `metadata.yaml`.
 `ros2 bag reindex <dir> -s mcap` recovered the full 14.4 min recording.
 
 ### Nav2 speed limits matched to the drivetrain
