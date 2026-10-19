@@ -94,6 +94,31 @@ def generate_launch_description():
             'controller_server.ros__parameters.FollowPath.desired_linear_vel': '0.07',
             'controller_server.ros__parameters.FollowPath.rotate_to_heading_angular_vel': '0.5',
             'controller_server.ros__parameters.progress_checker.required_movement_radius': '0.25',
+            # Path-following tuning from ~/bags/ekf_floor_225648 (2026-10-19):
+            # ~40% of each goal was spent rotating in place in ~20 short
+            # episodes, cruise sat at the 0.05 m/s floor, and every goal
+            # stopped at the 0.20 m tolerance edge.
+            # - Velocity-scaled lookahead at 0.07 m/s always clamps to the
+            #   0.2 m minimum; that short carrot follows the NavFn grid
+            #   zigzags and keeps crossing the 45 deg rotate-to-heading
+            #   threshold. A fixed 0.35 m lookahead averages them out.
+            'controller_server.ros__parameters.FollowPath.use_velocity_scaled_lookahead_dist': 'false',
+            'controller_server.ros__parameters.FollowPath.lookahead_dist': '0.35',
+            # - Cost-regulated scaling held cruise at 0.05 m/s almost
+            #   everywhere in a small room; collision detection stays on and
+            #   top speed is only 0.07 m/s.
+            'controller_server.ros__parameters.FollowPath.use_cost_regulated_linear_velocity_scaling': 'false',
+            'controller_server.ros__parameters.FollowPath.approach_velocity_scaling_dist': '0.3',
+            # - Goals ended 19-20 cm out, i.e. exactly at the tolerance edge.
+            'controller_server.ros__parameters.general_goal_checker.xy_goal_tolerance': '0.10',
+            # - NavFn's 0.5 m tolerance plans to the nearest free cell when the
+            #   goal is blocked. For an exploration frontier inside a wall's
+            #   inflation that cell was often the robot's own position: a
+            #   zero-length path, "Reached the goal!" instantly, and
+            #   explore_lite re-sent the same frontier ~200 times per 15 s
+            #   (~/bags/navtune_001414). At 0.15 m such goals fail at once
+            #   and explore_lite blacklists them.
+            'planner_server.ros__parameters.GridBased.tolerance': '0.15',
             'behavior_server.ros__parameters.max_rotational_vel': '0.6',
         },
         convert_types=True,

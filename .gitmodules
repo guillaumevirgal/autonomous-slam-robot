@@ -6,3 +6,7 @@
 	path = ros2_ws/sllidar_ros2
 	url = https://github.com/Slamtec/sllidar_ros2.git
 	branch = main
+[submodule "ros2_ws/m-explore-ros2"]
+	path = ros2_ws/m-explore-ros2
+	url = https://github.com/robo-friends/m-explore-ros2.git
+	branch = main
